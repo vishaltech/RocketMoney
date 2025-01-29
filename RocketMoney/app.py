@@ -1,8 +1,11 @@
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from plaid.api import plaid_api
-from plaid.model import LinkTokenCreateRequest, TransactionsGetRequest
+from plaid.api.plaid_api import PlaidApi
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.transactions_get_request import TransactionsGetRequest
+from plaid.model.products import Products
+from plaid.model.country_code import CountryCode
 from plaid.configuration import Configuration
 from plaid.api_client import ApiClient
 
@@ -21,7 +24,7 @@ configuration = Configuration(
     }
 )
 api_client = ApiClient(configuration)
-client = plaid_api.PlaidApi(api_client)
+client = PlaidApi(api_client)
 
 # App Title
 st.title("RocketMoney Plaid Integration")
@@ -32,12 +35,12 @@ def create_link_token():
         request = LinkTokenCreateRequest(
             user={"client_user_id": "unique_user_id"},
             client_name="RocketMoney",
-            products=["transactions"],
-            country_codes=["US"],
+            products=[Products("transactions")],
+            country_codes=[CountryCode("US")],
             language="en",
         )
         response = client.link_token_create(request)
-        return response["link_token"]
+        return response.link_token
     except Exception as e:
         st.error(f"Error creating link token: {e}")
         return None
@@ -74,6 +77,6 @@ if access_token:
     if transactions:
         st.subheader("Your Transactions")
         for transaction in transactions:
-            st.write(f"{transaction.date} - {transaction.name} - ${transaction.amount}")
+            st.write(f"{transaction.date} - {transaction.merchant_name or transaction.name} - ${transaction.amount}")
     else:
         st.write("No transactions found.")
