@@ -20,10 +20,6 @@ PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
 PLAID_SECRET = os.getenv('PLAID_SECRET')
 PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
 
-# Validate Plaid credentials
-if not all([PLAID_CLIENT_ID, PLAID_SECRET]):
-    raise ValueError("Plaid credentials are missing. Check your environment variables.")
-
 # Plaid client setup
 plaid_config = Configuration(
     host=f"https://{PLAID_ENV}.plaid.com",
@@ -78,49 +74,45 @@ Base.metadata.create_all(engine)
 
 # Helper Functions
 def register(username, email, password):
-    user = db_session.query(User).filter((User.username == username) | (User.email == email)).first()
-    if user:
-        return False, "Username or email already exists."
-    new_user = User(username=username, email=email)
-    new_user.set_password(password)
-    db_session.add(new_user)
-    db_session.commit()
-    return True, "Registration successful!"
+    try:
+        user = db_session.query(User).filter((User.username == username) | (User.email == email)).first()
+        if user:
+            return False, "Username or email already exists."
+        new_user = User(username=username, email=email)
+        new_user.set_password(password)
+        db_session.add(new_user)
+        db_session.commit()
+        return True, "Registration successful!"
+    except Exception as e:
+        return False, f"Error during registration: {e}"
 
 def login(username, password):
-    user = db_session.query(User).filter(User.username == username).first()
-    if user and user.check_password(password):
-        return True, user.id
-    return False, "Invalid username or password."
-
-def connect_plaid(public_token, user):
     try:
-        exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
-        exchange_response = plaid_api_client.item_public_token_exchange(exchange_request)
-        user.access_token = exchange_response.access_token
-        db_session.commit()
-        return True, "Bank account connected successfully!"
+        user = db_session.query(User).filter(User.username == username).first()
+        if user is None:
+            return False, "User not found."
+        if user.check_password(password):
+            return True, user.id
+        else:
+            return False, "Invalid password."
     except Exception as e:
-        return False, f"Plaid error: {e}"
+        return False, f"Error during login: {e}"
 
-def fetch_transactions(user):
+def get_user(user_id):
     try:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
-        request = TransactionsGetRequest(
-            access_token=user.access_token,
-            start_date=start_date,
-            end_date=end_date
-        )
-        response = plaid_api_client.transactions_get(request)
-        return response.transactions
+        return db_session.query(User).filter(User.id == user_id).first()
     except Exception as e:
-        return f"Error fetching transactions: {e}"
+        return None
 
 # Streamlit UI
 def main():
     st.title("RocketMoney Prototype")
-    menu = ["Login", "Register"] if not st.session_state.get('authenticated') else ["Dashboard", "Logout"]
+    
+    if 'authenticated' not in st.session_state:
+        st.session_state['authenticated'] = False
+        st.session_state['user_id'] = None
+
+    menu = ["Login", "Register"] if not st.session_state['authenticated'] else ["Dashboard", "Logout"]
     choice = st.sidebar.selectbox("Menu", menu)
 
     if choice == "Register":
@@ -140,28 +132,31 @@ def main():
                     st.error(message)
 
     elif choice == "Login":
-        st.subheader("Login")
+        st.subheader("Login to Your Account")
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         if st.button("Login"):
-            success, user_id = login(username, password)
+            success, result = login(username, password)
             if success:
                 st.session_state['authenticated'] = True
-                st.session_state['user_id'] = user_id
+                st.session_state['user_id'] = result
+                st.success("Logged in successfully!")
+                st.experimental_set_query_params()  # Ensure clean state
                 st.experimental_rerun()
             else:
-                st.error(user_id)
+                st.error(result)
 
     elif choice == "Dashboard":
-        user = db_session.query(User).get(st.session_state.get('user_id'))
-        st.write(f"Welcome, {user.username}!")
-        st.write("Your subscriptions:")
-        subscriptions = user.subscriptions
-        for sub in subscriptions:
-            st.write(f"- {sub.name} (${sub.amount}) - {sub.frequency}")
+        user = get_user(st.session_state['user_id'])
+        if user:
+            st.subheader(f"Welcome, {user.username}!")
+        else:
+            st.error("User not found.")
 
     elif choice == "Logout":
-        st.session_state.clear()
+        st.session_state['authenticated'] = False
+        st.session_state['user_id'] = None
+        st.success("You have been logged out.")
         st.experimental_rerun()
 
 if __name__ == "__main__":
