@@ -7,7 +7,7 @@ from pandasai.llm.openai import OpenAI
 import openai
 
 # Set OpenAI API key (Ensure it's stored securely)
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = "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"
 
 st.set_page_config(page_title="🚀 AI-Powered Data Analysis", layout="wide")
 
