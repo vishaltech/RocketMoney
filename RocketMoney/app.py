@@ -20,13 +20,10 @@ PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
 PLAID_SECRET = os.getenv('PLAID_SECRET')
 PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
 
-# Plaid client setup
+# Plaid API setup
 plaid_config = Configuration(
     host=f"https://{PLAID_ENV}.plaid.com",
-    api_key={
-        "clientId": PLAID_CLIENT_ID,
-        "secret": PLAID_SECRET
-    }
+    api_key={"clientId": PLAID_CLIENT_ID, "secret": PLAID_SECRET}
 )
 plaid_client = ApiClient(plaid_config)
 plaid_api_client = plaid_api.PlaidApi(plaid_client)
@@ -101,13 +98,57 @@ def login(username, password):
 def get_user(user_id):
     try:
         return db_session.query(User).filter(User.id == user_id).first()
-    except Exception as e:
+    except Exception:
         return None
+
+def connect_plaid(user, public_token):
+    try:
+        exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
+        exchange_response = plaid_api_client.item_public_token_exchange(exchange_request)
+        user.access_token = exchange_response.access_token
+        db_session.commit()
+        return True, "Bank account connected successfully!"
+    except Exception as e:
+        return False, f"Plaid connection error: {e}"
+
+def fetch_transactions(user):
+    try:
+        if not user.access_token:
+            return [], "No access token found. Connect to Plaid first."
+
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=90)).strftime('%Y-%m-%d')
+        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
+
+        transactions_request = TransactionsGetRequest(
+            access_token=user.access_token,
+            start_date=start_date,
+            end_date=end_date
+        )
+        transactions_response = plaid_api_client.transactions_get(transactions_request)
+        transactions = transactions_response.transactions
+
+        # Save recurring subscriptions
+        for txn in transactions:
+            existing_sub = db_session.query(Subscription).filter_by(transaction_id=txn.transaction_id).first()
+            if not existing_sub:
+                new_sub = Subscription(
+                    transaction_id=txn.transaction_id,
+                    name=txn.name,
+                    amount=txn.amount,
+                    category=', '.join(txn.category) if txn.category else 'Uncategorized',
+                    frequency='Monthly',
+                    user=user
+                )
+                db_session.add(new_sub)
+        db_session.commit()
+        return transactions, "Transactions fetched successfully!"
+    except Exception as e:
+        return [], f"Error fetching transactions: {e}"
 
 # Streamlit UI
 def main():
     st.title("RocketMoney Prototype")
-    
+
     if 'authenticated' not in st.session_state:
         st.session_state['authenticated'] = False
         st.session_state['user_id'] = None
@@ -136,28 +177,33 @@ def main():
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         if st.button("Login"):
-            success, result = login(username, password)
+            success, user_id = login(username, password)
             if success:
                 st.session_state['authenticated'] = True
-                st.session_state['user_id'] = result
+                st.session_state['user_id'] = user_id
                 st.success("Logged in successfully!")
-                st.experimental_set_query_params()  # Ensure clean state
-                st.experimental_rerun()
+                st.stop()
             else:
-                st.error(result)
+                st.error(user_id)
 
     elif choice == "Dashboard":
         user = get_user(st.session_state['user_id'])
         if user:
             st.subheader(f"Welcome, {user.username}!")
+            st.write("Your subscriptions:")
+            transactions, msg = fetch_transactions(user)
+            if transactions:
+                for txn in transactions:
+                    st.write(f"- {txn.name}: ${txn.amount} ({txn.category})")
+            else:
+                st.error(msg)
         else:
             st.error("User not found.")
 
     elif choice == "Logout":
-        st.session_state['authenticated'] = False
-        st.session_state['user_id'] = None
+        st.session_state.clear()
         st.success("You have been logged out.")
-        st.experimental_rerun()
+        st.stop()
 
 if __name__ == "__main__":
     main()
