@@ -12,17 +12,17 @@ from plaid.api_client import ApiClient
 import datetime
 import os
 
-# Configuration
-PLAID_CLIENT_ID = '679731ac0ef3330026c8b5e9'  
-PLAID_SECRET = '7ab1bf5770ed22eb85fb6297824dec'        
-PLAID_ENV = 'sandbox'  
+# Plaid API Keys
+PLAID_CLIENT_ID = "679731ac0ef3330026c8b5e9"  # Your client_id
+PLAID_SECRET = "7ab1bf5770ed22eb85fb6297824dec"  # Your secret
+PLAID_ENV = "sandbox"
 
-# Plaid API setup
+# Plaid API Setup
 plaid_config = Configuration(
     host=f"https://{PLAID_ENV}.plaid.com",
     api_key={
         "clientId": PLAID_CLIENT_ID,
-        "secret": PLAID_SECRET
+        "secret": PLAID_SECRET,
     }
 )
 plaid_client = ApiClient(plaid_config)
@@ -66,7 +66,7 @@ class Subscription(Base):
 
     user = relationship('User', back_populates='subscriptions')
 
-# Create tables if not existing
+# Create tables
 Base.metadata.create_all(engine)
 
 # Helper Functions
@@ -104,11 +104,11 @@ def get_user(user_id):
 def create_link_token(user_id):
     try:
         request = LinkTokenCreateRequest(
-            products=[Products('transactions')],
-            client_name="Your App Name",
-            country_codes=['US'],
-            language='en',
-            user={'client_user_id': str(user_id)}
+            products=[Products("transactions")],
+            client_name="RocketMoney",
+            country_codes=["US"],
+            language="en",
+            user={"client_user_id": str(user_id)},
         )
         response = plaid_api_client.link_token_create(request)
         return response.link_token
@@ -137,12 +137,12 @@ def fetch_transactions(user):
         transactions_request = TransactionsGetRequest(
             access_token=user.access_token,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
         )
         transactions_response = plaid_api_client.transactions_get(transactions_request)
         transactions = transactions_response.transactions
 
-        # Save recurring subscriptions
+        # Save transactions as subscriptions
         for txn in transactions:
             existing_sub = db_session.query(Subscription).filter_by(transaction_id=txn.transaction_id).first()
             if not existing_sub:
@@ -151,8 +151,8 @@ def fetch_transactions(user):
                     name=txn.name,
                     amount=txn.amount,
                     category=', '.join(txn.category) if txn.category else 'Uncategorized',
-                    frequency='Monthly',
-                    user=user
+                    frequency="Monthly",
+                    user=user,
                 )
                 db_session.add(new_sub)
         db_session.commit()
@@ -160,15 +160,15 @@ def fetch_transactions(user):
     except Exception as e:
         return [], f"Error fetching transactions: {e}"
 
-# Streamlit UI
+# Streamlit App
 def main():
     st.title("RocketMoney Prototype")
 
-    if 'authenticated' not in st.session_state:
-        st.session_state['authenticated'] = False
-        st.session_state['user_id'] = None
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+        st.session_state["user_id"] = None
 
-    menu = ["Login", "Register"] if not st.session_state['authenticated'] else ["Dashboard", "Logout"]
+    menu = ["Login", "Register"] if not st.session_state["authenticated"] else ["Dashboard", "Logout"]
     choice = st.sidebar.selectbox("Menu", menu)
 
     if choice == "Register":
@@ -194,15 +194,15 @@ def main():
         if st.button("Login"):
             success, user_id = login(username, password)
             if success:
-                st.session_state['authenticated'] = True
-                st.session_state['user_id'] = user_id
+                st.session_state["authenticated"] = True
+                st.session_state["user_id"] = user_id
                 st.success("Logged in successfully!")
                 st.experimental_rerun()
             else:
                 st.error(user_id)
 
     elif choice == "Dashboard":
-        user = get_user(st.session_state['user_id'])
+        user = get_user(st.session_state["user_id"])
         if user:
             st.subheader(f"Welcome, {user.username}!")
             st.write("Your subscriptions:")
