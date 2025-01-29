@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Set page config
+# Set page configuration
 st.set_page_config(page_title="RocketMoney - Secure Portal", layout="centered")
 
 # --- Helper Functions ---
 def hash_password(password):
-    """Hashes password using SHA256."""
+    """Hashes password using SHA256 for secure storage."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def load_users():
@@ -82,10 +82,13 @@ def file_upload():
     
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file, engine="openpyxl")
+            df = pd.read_excel(uploaded_file, engine="openpyxl")  # Avoid ZIP file errors
             st.success("✅ File uploaded successfully!")
-            st.write("### Preview of Uploaded Data:")
-            st.dataframe(df)
+            
+            # Show file content
+            st.write("### 📊 Preview of Uploaded Data:")
+            st.dataframe(df)  
+
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
 
