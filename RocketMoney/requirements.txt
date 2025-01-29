@@ -4,8 +4,11 @@ numpy>=1.22.0
 python-dotenv>=1.0.1
 openpyxl
 xlrd>=2.0.1
-pandasai
+pandasai==2.0.24
 openai
 pyyaml
 tqdm
 requests
+matplotlib
+scipy
+sqlalchemy
