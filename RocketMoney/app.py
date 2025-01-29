@@ -79,6 +79,7 @@ def file_upload():
     st.title(f"📂 Welcome, {st.session_state.username} - Upload Your Excel File")
 
     uploaded_file = st.file_uploader("Choose an Excel file", type=["xls", "xlsx"])
+    
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file, engine="openpyxl")
