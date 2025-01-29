@@ -2,7 +2,10 @@ streamlit==1.41.1
 pandas>=1.4.0
 numpy>=1.22.0
 python-dotenv>=1.0.1
-openpyxl  
+openpyxl
 xlrd>=2.0.1
 pandasai
 openai
+pyyaml
+tqdm
+requests
