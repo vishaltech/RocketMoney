@@ -198,12 +198,15 @@ def main():
             if success:
                 st.session_state['authenticated'] = True
                 st.session_state['user_id'] = user_id
-                st.experimental_set_query_params(authenticated=True)
-                st.experimental_rerun()
+                st.session_state['reload'] = True
             else:
                 st.error(user_id)
 
     elif choice == "Dashboard":
+        if st.session_state.get('reload', False):
+            st.session_state['reload'] = False
+            st.experimental_set_query_params()  # To reset URL parameters
+
         user = get_user(st.session_state['user_id'])
         if user:
             st.subheader(f"Welcome, {user.username}!")
@@ -227,7 +230,6 @@ def main():
     elif choice == "Logout":
         st.session_state.clear()
         st.success("You have been logged out.")
-        st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
