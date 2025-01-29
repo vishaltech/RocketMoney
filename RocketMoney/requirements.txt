@@ -1,0 +1,5 @@
+streamlit
+sqlalchemy
+bcrypt
+python-dotenv
+plaid-python

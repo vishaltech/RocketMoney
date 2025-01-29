@@ -1,0 +1,22 @@
+<div class="dashboard">
+    <h2>Welcome, {{ username }}!</h2>
+    <div class="accounts">
+        <h3>Your Accounts</h3>
+        {% for account in accounts %}
+            <div class="account">
+                <p><strong>{{ account.name }}</strong></p>
+                <p>Type: {{ account.type }}</p>
+                <p>Balance: ${{ account.balances.current }}</p>
+            </div>
+        {% endfor %}
+    </div>
+    
+    <div class="transactions">
+        <h3>Recent Transactions (Last 30 Days)</h3>
+        <ul>
+            {% for txn in transactions %}
+                <li>{{ txn.date }} - {{ txn.name }} - ${{ txn.amount }} - {{ txn.category }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
