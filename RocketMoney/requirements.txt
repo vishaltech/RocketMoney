@@ -12,3 +12,7 @@ requests
 matplotlib
 scipy
 sqlalchemy
+plotly
+numpy
+seaborn
+matplotlib
