@@ -8,6 +8,7 @@ from plaid.model.country_code import CountryCode
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.api_client import ApiClient
 from plaid.configuration import Configuration
+from typing import Dict
 
 # Load environment variables
 load_dotenv()
@@ -33,10 +34,12 @@ config = Configuration(
 api_client = ApiClient(config)
 plaid_client = PlaidApi(api_client)
 
+# In-memory user database (for simplicity, use a real database in production)
+users_db: Dict[str, Dict] = {}
 
-# Helper function to create a Link token
-def create_link_token():
-    user = LinkTokenCreateRequestUser(client_user_id="unique-user-id")
+# Function to create a Plaid Link token
+def create_link_token(user_id: str):
+    user = LinkTokenCreateRequestUser(client_user_id=user_id)
     request = LinkTokenCreateRequest(
         user=user,
         client_name="Rocket Money",
@@ -45,42 +48,69 @@ def create_link_token():
         language="en",
     )
     response = plaid_client.link_token_create(request)
-    return response["link_token"]
+    return response.link_token
 
 
 # Streamlit app
 def main():
     st.title("Rocket Money with Plaid Integration")
 
-    # Login section
+    # Initialize session state variables
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
+    if "user_id" not in st.session_state:
+        st.session_state.user_id = None
 
+    # Registration Section
     if not st.session_state.authenticated:
-        st.subheader("Login")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            # Dummy authentication for demonstration
-            if username == "admin" and password == "password":
-                st.session_state.authenticated = True
-                st.success("Logged in successfully!")
-            else:
-                st.error("Invalid username or password")
-    else:
-        st.subheader("Plaid Integration")
-        if st.button("Generate Link Token"):
+        st.subheader("Register or Login")
+        option = st.radio("Choose an option", ["Login", "Register"])
+
+        if option == "Register":
+            st.subheader("User Registration")
+            username = st.text_input("Enter a username")
+            password = st.text_input("Enter a password", type="password")
+            if st.button("Register"):
+                if username in users_db:
+                    st.error("Username already exists!")
+                elif username and password:
+                    users_db[username] = {"password": password}
+                    st.success("User registered successfully!")
+                else:
+                    st.error("Please provide valid credentials.")
+
+        elif option == "Login":
+            st.subheader("User Login")
+            username = st.text_input("Enter your username")
+            password = st.text_input("Enter your password", type="password")
+            if st.button("Login"):
+                if username in users_db and users_db[username]["password"] == password:
+                    st.session_state.authenticated = True
+                    st.session_state.user_id = username
+                    st.success("Logged in successfully!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid username or password.")
+
+    # Dashboard Section
+    if st.session_state.authenticated:
+        st.subheader(f"Welcome, {st.session_state.user_id}!")
+        st.write("You are logged in.")
+        
+        # Plaid Link token generation
+        if st.button("Generate Plaid Link Token"):
             try:
-                link_token = create_link_token()
-                st.success(f"Link token generated: {link_token}")
-                st.write("Use this token to connect with Plaid Link.")
+                link_token = create_link_token(st.session_state.user_id)
+                st.success("Plaid Link token generated!")
+                st.write(f"Link Token: {link_token}")
             except Exception as e:
-                st.error(f"Failed to generate link token: {e}")
+                st.error(f"Error generating Plaid Link token: {e}")
 
         # Logout button
         if st.button("Logout"):
             st.session_state.authenticated = False
-            st.session_state.clear()
+            st.session_state.user_id = None
+            st.success("You have been logged out.")
             st.experimental_rerun()
 
 
