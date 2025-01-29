@@ -14,6 +14,10 @@ st.set_page_config(page_title="🚀 SQL Data Analyzer", layout="wide")
 st.title("📊 SQL-Powered Data Analyzer")
 st.write("Upload an Excel or CSV file to **explore, clean, visualize, and query with SQL!**")
 
+# 🔹 User Input for Table Name
+table_name = st.text_input("🔤 Enter the SQL table name:", "uploaded_data")  # Default: uploaded_data
+table_name = table_name.replace(" ", "_")  # Ensure SQL-safe table names
+
 # File Uploader
 uploaded_file = st.file_uploader("📂 Upload your Excel or CSV file", type=["csv", "xls", "xlsx"])
 
@@ -37,11 +41,11 @@ if uploaded_file:
         categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
 
         # 🔥 SQL Query Execution
-        st.write("### 🛠 Query Your Data with SQL")
+        st.write(f"### 🛠 Query Your Data with SQL (Table: `{table_name}`)")
         conn = sqlite3.connect(":memory:")  # Use an in-memory database
-        df.to_sql("uploaded_data", conn, index=False, if_exists="replace")  # Load into SQL
+        df.to_sql(table_name, conn, index=False, if_exists="replace")  # Load into SQL using user-defined name
 
-        query = st.text_area("Write your SQL query (e.g., `SELECT * FROM uploaded_data LIMIT 10;`)")
+        query = st.text_area(f"Write your SQL query for `{table_name}` (e.g., `SELECT * FROM {table_name} LIMIT 10;`)")
         if st.button("Run SQL Query"):
             try:
                 query_result = pd.read_sql_query(query, conn)
@@ -52,7 +56,7 @@ if uploaded_file:
                 query_file = io.BytesIO()
                 query_result.to_csv(query_file, index=False)
                 query_file.seek(0)
-                st.download_button("📥 Download SQL Query Results", query_file, file_name="query_results.csv", mime="text/csv")
+                st.download_button("📥 Download SQL Query Results", query_file, file_name=f"{table_name}_query_results.csv", mime="text/csv")
 
             except Exception as e:
                 st.error(f"❌ SQL Error: {str(e)}")
@@ -88,7 +92,7 @@ if uploaded_file:
         cleaned_file = io.BytesIO()
         df.to_csv(cleaned_file, index=False)
         cleaned_file.seek(0)
-        st.download_button("📥 Download Cleaned Data", cleaned_file, file_name="cleaned_data.csv", mime="text/csv")
+        st.download_button("📥 Download Cleaned Data", cleaned_file, file_name=f"{table_name}_cleaned_data.csv", mime="text/csv")
 
     except Exception as e:
         st.error(f"🚨 An error occurred: {str(e)}")
