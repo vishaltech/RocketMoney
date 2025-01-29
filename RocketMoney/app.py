@@ -1,8 +1,10 @@
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from plaid import Client
-from plaid.errors import PlaidError
+from plaid.api import plaid_api
+from plaid.model import LinkTokenCreateRequest, TransactionsGetRequest
+from plaid.configuration import Configuration
+from plaid.api_client import ApiClient
 
 # Load environment variables
 load_dotenv()
@@ -11,7 +13,15 @@ PLAID_SECRET = os.getenv("PLAID_SECRET")
 PLAID_ENV = os.getenv("PLAID_ENV")
 
 # Configure Plaid client
-client = Client(client_id=PLAID_CLIENT_ID, secret=PLAID_SECRET, environment=PLAID_ENV)
+configuration = Configuration(
+    host=f"https://{PLAID_ENV}.plaid.com",
+    api_key={
+        "clientId": PLAID_CLIENT_ID,
+        "secret": PLAID_SECRET,
+    }
+)
+api_client = ApiClient(configuration)
+client = plaid_api.PlaidApi(api_client)
 
 # App Title
 st.title("RocketMoney Plaid Integration")
@@ -19,16 +29,16 @@ st.title("RocketMoney Plaid Integration")
 # Plaid Link Token Creation
 def create_link_token():
     try:
-        response = client.LinkToken.create({
-            "user": {"client_user_id": "unique_user_id"},
-            "client_name": "RocketMoney",
-            "products": ["transactions"],
-            "country_codes": ["US"],
-            "language": "en",
-            "redirect_uri": "http://localhost:8501",
-        })
+        request = LinkTokenCreateRequest(
+            user={"client_user_id": "unique_user_id"},
+            client_name="RocketMoney",
+            products=["transactions"],
+            country_codes=["US"],
+            language="en",
+        )
+        response = client.link_token_create(request)
         return response["link_token"]
-    except PlaidError as e:
+    except Exception as e:
         st.error(f"Error creating link token: {e}")
         return None
 
@@ -45,20 +55,25 @@ if st.session_state["link_token"]:
 # Transactions Data
 def fetch_transactions(access_token):
     try:
-        response = client.Transactions.get(access_token, start_date="2023-01-01", end_date="2025-01-01")
-        transactions = response["transactions"]
+        request = TransactionsGetRequest(
+            access_token=access_token,
+            start_date="2023-01-01",
+            end_date="2025-01-01",
+        )
+        response = client.transactions_get(request)
+        transactions = response.transactions
         return transactions
-    except PlaidError as e:
+    except Exception as e:
         st.error(f"Error fetching transactions: {e}")
         return []
 
 # Dummy section for access token and transactions display
-access_token = st.text_input("Enter Access Token (dummy for now)")
+access_token = st.text_input("Enter Access Token")
 if access_token:
     transactions = fetch_transactions(access_token)
     if transactions:
         st.subheader("Your Transactions")
         for transaction in transactions:
-            st.write(f"{transaction['date']} - {transaction['name']} - ${transaction['amount']}")
+            st.write(f"{transaction.date} - {transaction.name} - ${transaction.amount}")
     else:
         st.write("No transactions found.")
