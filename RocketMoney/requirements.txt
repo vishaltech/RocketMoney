@@ -1,0 +1,8 @@
+streamlit==1.41.1
+plaid-python==8.1.0
+python-dotenv==1.0.0
+requests==2.31.0
+altair==5.0.1
+pandas==2.1.1
+sqlalchemy==2.0.21
+bcrypt==4.0.1
