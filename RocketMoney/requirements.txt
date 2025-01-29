@@ -16,3 +16,11 @@ plotly
 numpy
 seaborn
 matplotlib
+streamlit
+pandas
+numpy
+plotly
+seaborn
+matplotlib
+altair
+fpdf
