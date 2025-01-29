@@ -118,7 +118,7 @@ def create_link_token(user_id):
         request = LinkTokenCreateRequest(
             products=["transactions"],
             client_name="RocketMoney Prototype",
-            country_codes=[CountryCode.US],
+            country_codes=[CountryCode("US")],
             language="en",
             user={"client_user_id": str(user_id)},
         )
@@ -150,7 +150,7 @@ def fetch_transactions(user):
             if not existing_sub:
                 new_sub = Subscription(
                     transaction_id=txn.transaction_id,
-                    name=txn.name,
+                    name=txn.merchant_name or "Unknown",
                     amount=txn.amount,
                     category=', '.join(txn.category) if txn.category else 'Uncategorized',
                     frequency='Monthly',
@@ -198,7 +198,7 @@ def main():
             if success:
                 st.session_state['authenticated'] = True
                 st.session_state['user_id'] = user_id
-                st.success("Logged in successfully!")
+                st.experimental_set_query_params(authenticated=True)
                 st.experimental_rerun()
             else:
                 st.error(user_id)
