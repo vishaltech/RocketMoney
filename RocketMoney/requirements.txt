@@ -2,4 +2,4 @@ streamlit
 sqlalchemy
 bcrypt
 python-dotenv
-plaid-python
+plaid-python>=8.0.0
