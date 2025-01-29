@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
-from dotenv import load_dotenv
 import hashlib
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -57,6 +57,7 @@ def register_user():
             save_user(new_username, new_password)
             st.success("✅ Registration successful! Please login.")
             st.session_state.page = "Login"
+            st.rerun()
 
 # --- LOGIN SYSTEM ---
 def login_user():
@@ -69,7 +70,7 @@ def login_user():
             st.session_state.logged_in = True
             st.session_state.username = username
             st.success(f"✅ Welcome, {username}! Redirecting...")
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("❌ Invalid username or password. Try again.")
 
@@ -90,7 +91,7 @@ def file_upload():
     if st.button("Logout 🔒"):
         st.session_state.logged_in = False
         st.session_state.username = ""
-        st.experimental_rerun()
+        st.rerun()
 
 # --- MAIN LOGIC ---
 if "page" not in st.session_state:
