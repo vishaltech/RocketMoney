@@ -24,3 +24,13 @@ seaborn
 matplotlib
 altair
 fpdf
+streamlit
+pandas
+numpy
+plotly
+seaborn
+matplotlib
+altair
+sqlite3
+fpdf
+
