@@ -43,4 +43,20 @@ altair
 sqlite3
 fpdf
 pyyaml 
+streamlit
+pandas
+numpy
+plotly
+seaborn
+matplotlib
+altair
+fpdf
+openpyxl
+xlrd
+sqlalchemy
+pyyaml
+tqdm
+requests
+scipy
+
 
