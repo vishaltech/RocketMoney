@@ -1,53 +1,54 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import os
+from dotenv import load_dotenv
 
-# Basic sign-in logic
+# Load environment variables if needed
+load_dotenv()
+
+# --- USER AUTHENTICATION ---
 def authenticate(username, password):
-    # Replace this dictionary with your actual authentication logic
+    """Basic authentication function"""
     valid_users = {
         "admin": "password123",
-        "user1": "mypassword",
+        "user1": "pass456"
     }
     return valid_users.get(username) == password
 
-# App layout
-def main():
-    st.title("Simple Sign-In and File Upload App")
+# --- UI: LOGIN PAGE ---
+st.title("🚀 RocketMoney - Secure File Upload")
 
-    # Sign-in section
-    st.header("Sign-In")
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-    if not st.session_state.authenticated:
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            if authenticate(username, password):
-                st.session_state.authenticated = True
-                st.success("Login successful!")
-            else:
-                st.error("Invalid username or password")
-        return
+if not st.session_state.logged_in:
+    st.subheader("Login to continue")
+    username = st.text_input("Username", placeholder="Enter your username")
+    password = st.text_input("Password", type="password", placeholder="Enter your password")
 
-    # File upload section
-    st.header("Upload an Excel File")
-    uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
+    if st.button("Login"):
+        if authenticate(username, password):
+            st.session_state.logged_in = True
+            st.success("Login successful! 🎉")
+            st.experimental_rerun()
+        else:
+            st.error("Invalid username or password. Try again.")
 
-    if uploaded_file is not None:
+# --- UI: EXCEL FILE UPLOAD ---
+if st.session_state.logged_in:
+    st.subheader("Upload an Excel File 📂")
+
+    uploaded_file = st.file_uploader("Choose an Excel file", type=["xls", "xlsx"])
+
+    if uploaded_file:
         try:
-            # Read the uploaded Excel file
-            df = pd.read_excel(uploaded_file)
-            st.success("File uploaded successfully!")
-            st.write("Preview of the uploaded file:")
-            st.dataframe(df)  # Display the contents of the file
+            df = pd.read_excel(uploaded_file, engine="openpyxl")
+            st.write("### Preview of Uploaded Data:")
+            st.dataframe(df)  # Display the Excel file contents
         except Exception as e:
             st.error(f"Error reading file: {e}")
 
-    # Logout option
     if st.button("Logout"):
-        st.session_state.authenticated = False
+        st.session_state.logged_in = False
         st.experimental_rerun()
-
-if __name__ == "__main__":
-    main()
