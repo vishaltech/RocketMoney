@@ -197,7 +197,7 @@ def main():
                 st.session_state["authenticated"] = True
                 st.session_state["user_id"] = user_id
                 st.success("Logged in successfully!")
-                st.experimental_rerun()
+                st.experimental_set_query_params(refresh="true")  # Ensure a page refresh
             else:
                 st.error(user_id)
 
@@ -218,7 +218,7 @@ def main():
     elif choice == "Logout":
         st.session_state.clear()
         st.success("You have been logged out.")
-        st.experimental_rerun()
+        st.experimental_set_query_params(refresh="true")  # Ensure a page refresh
 
 if __name__ == "__main__":
     main()
