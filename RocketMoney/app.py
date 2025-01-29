@@ -5,7 +5,7 @@ from pandasai import SmartDataframe
 from pandasai.llm.openai import OpenAI
 
 # Set OpenAI API key
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 llm = OpenAI(api_token=OPENAI_API_KEY)
 
 # Streamlit UI
