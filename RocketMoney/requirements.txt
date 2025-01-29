@@ -13,3 +13,5 @@ pyyaml
 tqdm
 requests
 scipy
+snowflake-connector-python  
+snowflake-sqlalchemy     
