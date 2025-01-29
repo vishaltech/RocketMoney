@@ -1,118 +1,64 @@
 import os
-import streamlit as st
 from dotenv import load_dotenv
-from plaid.api.plaid_api import PlaidApi
-from plaid.model.link_token_create_request import LinkTokenCreateRequest
-from plaid.model.products import Products
-from plaid.model.country_code import CountryCode
-from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
-from plaid.api_client import ApiClient
-from plaid.configuration import Configuration
-from typing import Dict
+import streamlit as st
+from plaid import Client
+from plaid.errors import PlaidError
 
 # Load environment variables
 load_dotenv()
+PLAID_CLIENT_ID = os.getenv("PLAID_CLIENT_ID")
+PLAID_SECRET = os.getenv("PLAID_SECRET")
+PLAID_ENV = os.getenv("PLAID_ENV")
 
-# Plaid API keys
-PLAID_CLIENT_ID = os.getenv("PLAID_CLIENT_ID", "679731ac0ef3330026c8b5e9")
-PLAID_SECRET = os.getenv("PLAID_SECRET", "7ab1bf5770ed22eb85fb6297824dec")
-PLAID_ENV = os.getenv("PLAID_ENV", "sandbox")
+# Configure Plaid client
+client = Client(client_id=PLAID_CLIENT_ID, secret=PLAID_SECRET, environment=PLAID_ENV)
 
-# Plaid API environment host
-PLAID_HOSTS = {
-    "sandbox": "https://sandbox.plaid.com",
-    "development": "https://development.plaid.com",
-    "production": "https://production.plaid.com",
-}
-PLAID_HOST = PLAID_HOSTS.get(PLAID_ENV, PLAID_HOSTS["sandbox"])
+# App Title
+st.title("RocketMoney Plaid Integration")
 
-# Plaid API configuration
-config = Configuration(
-    host=PLAID_HOST,
-    api_key={"clientId": PLAID_CLIENT_ID, "secret": PLAID_SECRET},
-)
-api_client = ApiClient(config)
-plaid_client = PlaidApi(api_client)
+# Plaid Link Token Creation
+def create_link_token():
+    try:
+        response = client.LinkToken.create({
+            "user": {"client_user_id": "unique_user_id"},
+            "client_name": "RocketMoney",
+            "products": ["transactions"],
+            "country_codes": ["US"],
+            "language": "en",
+            "redirect_uri": "http://localhost:8501",
+        })
+        return response["link_token"]
+    except PlaidError as e:
+        st.error(f"Error creating link token: {e}")
+        return None
 
-# In-memory user database (for simplicity, use a real database in production)
-users_db: Dict[str, Dict] = {}
+# User Interface
+if "link_token" not in st.session_state:
+    st.session_state["link_token"] = create_link_token()
 
-# Function to create a Plaid Link token
-def create_link_token(user_id: str):
-    user = LinkTokenCreateRequestUser(client_user_id=user_id)
-    request = LinkTokenCreateRequest(
-        user=user,
-        client_name="Rocket Money",
-        products=[Products.AUTH],
-        country_codes=[CountryCode.US],
-        language="en",
-    )
-    response = plaid_client.link_token_create(request)
-    return response.link_token
+if st.session_state["link_token"]:
+    st.subheader("Connect Your Bank Account")
+    st.markdown(f"""
+        <a href="https://plaid.com/link/?token={st.session_state['link_token']}" target="_blank" style="color: white; background-color: #0078D4; padding: 10px 15px; text-decoration: none; border-radius: 5px;">Connect Account</a>
+    """, unsafe_allow_html=True)
 
+# Transactions Data
+def fetch_transactions(access_token):
+    try:
+        response = client.Transactions.get(access_token, start_date="2023-01-01", end_date="2025-01-01")
+        transactions = response["transactions"]
+        return transactions
+    except PlaidError as e:
+        st.error(f"Error fetching transactions: {e}")
+        return []
 
-# Streamlit app
-def main():
-    st.title("Rocket Money with Plaid Integration")
-
-    # Initialize session state variables
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = None
-
-    # Registration Section
-    if not st.session_state.authenticated:
-        st.subheader("Register or Login")
-        option = st.radio("Choose an option", ["Login", "Register"])
-
-        if option == "Register":
-            st.subheader("User Registration")
-            username = st.text_input("Enter a username")
-            password = st.text_input("Enter a password", type="password")
-            if st.button("Register"):
-                if username in users_db:
-                    st.error("Username already exists!")
-                elif username and password:
-                    users_db[username] = {"password": password}
-                    st.success("User registered successfully!")
-                else:
-                    st.error("Please provide valid credentials.")
-
-        elif option == "Login":
-            st.subheader("User Login")
-            username = st.text_input("Enter your username")
-            password = st.text_input("Enter your password", type="password")
-            if st.button("Login"):
-                if username in users_db and users_db[username]["password"] == password:
-                    st.session_state.authenticated = True
-                    st.session_state.user_id = username
-                    st.success("Logged in successfully!")
-                    st.experimental_rerun()
-                else:
-                    st.error("Invalid username or password.")
-
-    # Dashboard Section
-    if st.session_state.authenticated:
-        st.subheader(f"Welcome, {st.session_state.user_id}!")
-        st.write("You are logged in.")
-        
-        # Plaid Link token generation
-        if st.button("Generate Plaid Link Token"):
-            try:
-                link_token = create_link_token(st.session_state.user_id)
-                st.success("Plaid Link token generated!")
-                st.write(f"Link Token: {link_token}")
-            except Exception as e:
-                st.error(f"Error generating Plaid Link token: {e}")
-
-        # Logout button
-        if st.button("Logout"):
-            st.session_state.authenticated = False
-            st.session_state.user_id = None
-            st.success("You have been logged out.")
-            st.experimental_rerun()
-
-
-if __name__ == "__main__":
-    main()
+# Dummy section for access token and transactions display
+access_token = st.text_input("Enter Access Token (dummy for now)")
+if access_token:
+    transactions = fetch_transactions(access_token)
+    if transactions:
+        st.subheader("Your Transactions")
+        for transaction in transactions:
+            st.write(f"{transaction['date']} - {transaction['name']} - ${transaction['amount']}")
+    else:
+        st.write("No transactions found.")
