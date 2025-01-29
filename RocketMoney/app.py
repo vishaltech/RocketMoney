@@ -1,71 +1,48 @@
 import streamlit as st
 import pandas as pd
-import yaml
-import os
-from pandasai.smart_dataframe import SmartDataframe
+import yaml  # Ensure pyyaml is installed
+from pandasai.smart_dataframe import SmartDataframe  # Correct import
 from pandasai.llm.openai import OpenAI
-import openai
+import os
 
-# Set OpenAI API key (Ensure it's stored securely)
-os.environ["OPENAI_API_KEY"] = "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"
+# Ensure API Key is set correctly
+OPENAI_API_KEY = "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"
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-st.set_page_config(page_title="🚀 AI-Powered Data Analysis", layout="wide")
+# Initialize OpenAI
+llm = OpenAI(api_key=OPENAI_API_KEY)
 
+# User Authentication Logic
+def login_user():
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username == "admin" and password == "password":  # Dummy check
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.success(f"✅ Welcome, {username}! Redirecting...")
+            st.rerun()  # Corrected from `st.experimental_rerun()`
+        else:
+            st.error("❌ Invalid username or password. Try again.")
+
+# Main App Logic
 def main():
-    st.title("📊 AI-Powered File Analyzer")
-    uploaded_file = st.file_uploader("📂 Upload a CSV/XLSX/XLS file", type=['xls', 'xlsx', 'csv'])
-
-    if uploaded_file is not None:
-        file_extension = uploaded_file.name.split('.')[-1].lower()
-
-        try:
-            if file_extension == 'xlsx':
-                df = pd.read_excel(uploaded_file, engine='openpyxl')
-            elif file_extension == 'xls':
-                df = pd.read_excel(uploaded_file, engine='xlrd')
-            elif file_extension == 'csv':
-                df = pd.read_csv(uploaded_file)
-            else:
-                st.error("❌ Unsupported file type.")
-                return
-
-            st.success("✅ File uploaded successfully!")
-            st.write("### 🔍 Data Preview")
-            st.dataframe(df.head(10))
-
-            # AI Analysis
-            generate_ai_insights(df)
-
-        except Exception as e:
-            st.error(f"⚠️ Error: {e}")
-
-def generate_ai_insights(df):
-    """ Use AI to analyze and summarize key insights from the dataset """
-    st.write("### 📈 AI-Generated Key Insights")
-
-    try:
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            st.error("❌ OpenAI API key is missing!")
-            return
-
-        llm = OpenAI(api_token=openai_api_key)
-        smart_df = SmartDataframe(df, config={"llm": llm})
-
-        questions = [
-            "What are the key trends in this dataset?",
-            "What are the most important columns?",
-            "Is there any missing data?",
-            "Can you summarize the top insights in one paragraph?"
-        ]
-
-        for question in questions:
-            response = smart_df.chat(question)
-            st.write(f"**🔹 {question}**")
-            st.write(response)
-
-    except Exception as e:
-        st.error(f"⚠️ AI Analysis Failed: {e}")
+    st.title("RocketMoney AI Dashboard")
+    
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    
+    if not st.session_state.logged_in:
+        option = st.sidebar.radio("Select an option", ["Login", "Register"])
+        if option == "Login":
+            login_user()
+        else:
+            st.write("🚧 Registration is under construction.")
+    else:
+        st.write("💰 Welcome to RocketMoney AI!")
+        df = pd.DataFrame({"Category": ["Income", "Expenses", "Savings"], "Amount": [5000, 2000, 1500]})
+        sdf = SmartDataframe(df, config={"llm": llm})
+        st.write(sdf)
 
 if __name__ == "__main__":
     main()
