@@ -5,32 +5,32 @@ import bcrypt
 from plaid.api import plaid_api
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.products import Products
 from plaid.configuration import Configuration
 from plaid.api_client import ApiClient
 import datetime
 import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 # Configuration
-SECRET_KEY = os.getenv('SECRET_KEY', 'default_secret_key')
-PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
-PLAID_SECRET = os.getenv('PLAID_SECRET')
-PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
+PLAID_CLIENT_ID = '679731ac0ef3330026c8b5e9'  # Replace with your Plaid client_id
+PLAID_SECRET = '7ab1bf5770ed22eb85fb6297824dec'        # Replace with your Plaid secret
+PLAID_ENV = 'sandbox'
 
 # Plaid API setup
 plaid_config = Configuration(
     host=f"https://{PLAID_ENV}.plaid.com",
-    api_key={"clientId": PLAID_CLIENT_ID, "secret": PLAID_SECRET}
+    api_key={
+        "clientId": PLAID_CLIENT_ID,
+        "secret": PLAID_SECRET
+    }
 )
 plaid_client = ApiClient(plaid_config)
 plaid_api_client = plaid_api.PlaidApi(plaid_client)
 
 # Database setup
 Base = declarative_base()
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///app.db')
+DATABASE_URL = 'sqlite:///app.db'  # Using SQLite for simplicity; adjust as needed
 engine = create_engine(DATABASE_URL, echo=False)
 Session = scoped_session(sessionmaker(bind=engine))
 db_session = Session()
@@ -99,6 +99,21 @@ def get_user(user_id):
     try:
         return db_session.query(User).filter(User.id == user_id).first()
     except Exception:
+        return None
+
+def create_link_token(user_id):
+    try:
+        request = LinkTokenCreateRequest(
+            products=[Products('transactions')],
+            client_name="Your App Name",
+            country_codes=['US'],
+            language='en',
+            user={'client_user_id': str(user_id)}
+        )
+        response = plaid_api_client.link_token_create(request)
+        return response.link_token
+    except Exception as e:
+        st.error(f"Error creating link token: {e}")
         return None
 
 def connect_plaid(user, public_token):
@@ -173,37 +188,5 @@ def main():
                     st.error(message)
 
     elif choice == "Login":
-        st.subheader("Login to Your Account")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            success, user_id = login(username, password)
-            if success:
-                st.session_state['authenticated'] = True
-                st.session_state['user_id'] = user_id
-                st.success("Logged in successfully!")
-                st.stop()
-            else:
-                st.error(user_id)
-
-    elif choice == "Dashboard":
-        user = get_user(st.session_state['user_id'])
-        if user:
-            st.subheader(f"Welcome, {user.username}!")
-            st.write("Your subscriptions:")
-            transactions, msg = fetch_transactions(user)
-            if transactions:
-                for txn in transactions:
-                    st.write(f"- {txn.name}: ${txn.amount} ({txn.category})")
-            else:
-                st.error(msg)
-        else:
-            st.error("User not found.")
-
-    elif choice == "Logout":
-        st.session_state.clear()
-        st.success("You have been logged out.")
-        st.stop()
-
-if __name__ == "__main__":
-    main()
+        st.subheader
+::contentReference[oaicite:0]{index=0}
