@@ -1,13 +1,13 @@
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from plaid.api import PlaidApi
+from plaid.configuration import Configuration
+from plaid.api_client import ApiClient
+from plaid.api.plaid_api import PlaidApi
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
-from plaid.configuration import Configuration
-from plaid.api_client import ApiClient
 
 # Load environment variables
 load_dotenv()
@@ -47,7 +47,7 @@ def create_link_token():
             language="en",
         )
         response = plaid_client.link_token_create(request)
-        return response.link_token
+        return response["link_token"]
     except Exception as e:
         st.error(f"Error creating link token: {e}")
         return None
@@ -61,7 +61,7 @@ def fetch_transactions(access_token):
             end_date="2023-12-31",
         )
         response = plaid_client.transactions_get(request)
-        return response.transactions
+        return response["transactions"]
     except Exception as e:
         st.error(f"Error fetching transactions: {e}")
         return []
