@@ -1,21 +1,21 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import numpy as np
 import sqlite3
+import plotly.express as px
 import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np
 import io
 import altair as alt
 from fpdf import FPDF
 
-# Set up the Streamlit page
-st.set_page_config(page_title="🚀 Advanced SQL Data Analyzer", layout="wide")
+# Set up Streamlit Page
+st.set_page_config(page_title="🚀 SQL Data Analyzer", layout="wide")
 st.title("📊 SQL-Powered Data Analyzer")
-st.write("Upload an Excel or CSV file to explore, clean, visualize, and **query with SQL**!")
+st.write("Upload an Excel or CSV file to **explore, clean, visualize, and query with SQL!**")
 
-# File uploader
-uploaded_file = st.file_uploader("📂 Upload an Excel or CSV file", type=["csv", "xls", "xlsx"])
+# File Uploader
+uploaded_file = st.file_uploader("📂 Upload your Excel or CSV file", type=["csv", "xls", "xlsx"])
 
 if uploaded_file:
     try:
@@ -57,7 +57,7 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"❌ SQL Error: {str(e)}")
 
-        # 📊 Advanced Visualization
+        # 📊 Interactive Data Visualization
         st.write("### 📊 Interactive Data Visualization")
         chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Scatter Plot", "Line Chart", "Histogram", "Pie Chart"])
         x_axis = st.selectbox("Select X-axis", numeric_columns + categorical_columns)
@@ -92,3 +92,4 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"🚨 An error occurred: {str(e)}")
+
