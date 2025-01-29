@@ -1,5 +1,0 @@
-streamlit
-sqlalchemy
-bcrypt
-python-dotenv
-plaid-python>=8.0.0
