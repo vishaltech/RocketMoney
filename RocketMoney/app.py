@@ -13,9 +13,9 @@ import datetime
 import os
 
 # Configuration
-PLAID_CLIENT_ID = '679731ac0ef3330026c8b5e9'  # Replace with your Plaid client_id
-PLAID_SECRET = '7ab1bf5770ed22eb85fb6297824dec'        # Replace with your Plaid secret
-PLAID_ENV = 'sandbox'
+PLAID_CLIENT_ID = '679731ac0ef3330026c8b5e9'  
+PLAID_SECRET = '7ab1bf5770ed22eb85fb6297824dec'        
+PLAID_ENV = 'sandbox'  
 
 # Plaid API setup
 plaid_config = Configuration(
@@ -30,7 +30,7 @@ plaid_api_client = plaid_api.PlaidApi(plaid_client)
 
 # Database setup
 Base = declarative_base()
-DATABASE_URL = 'sqlite:///app.db'  # Using SQLite for simplicity; adjust as needed
+DATABASE_URL = 'sqlite:///app.db'
 engine = create_engine(DATABASE_URL, echo=False)
 Session = scoped_session(sessionmaker(bind=engine))
 db_session = Session()
@@ -188,5 +188,37 @@ def main():
                     st.error(message)
 
     elif choice == "Login":
-        st.subheader
-::contentReference[oaicite:0]{index=0}
+        st.subheader("Login to Your Account")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            success, user_id = login(username, password)
+            if success:
+                st.session_state['authenticated'] = True
+                st.session_state['user_id'] = user_id
+                st.success("Logged in successfully!")
+                st.experimental_rerun()
+            else:
+                st.error(user_id)
+
+    elif choice == "Dashboard":
+        user = get_user(st.session_state['user_id'])
+        if user:
+            st.subheader(f"Welcome, {user.username}!")
+            st.write("Your subscriptions:")
+            transactions, msg = fetch_transactions(user)
+            if transactions:
+                for txn in transactions:
+                    st.write(f"- {txn.name}: ${txn.amount} ({txn.category})")
+            else:
+                st.error(msg)
+        else:
+            st.error("User not found.")
+
+    elif choice == "Logout":
+        st.session_state.clear()
+        st.success("You have been logged out.")
+        st.experimental_rerun()
+
+if __name__ == "__main__":
+    main()
