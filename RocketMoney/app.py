@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import plotly.express as px
+import sqlite3  # Ensure SQLite is installed
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,7 +9,7 @@ import io
 import altair as alt
 from fpdf import FPDF
 
-# Set up Streamlit Page
+# Streamlit Page Configuration
 st.set_page_config(page_title="🚀 SQL Data Analyzer", layout="wide")
 st.title("📊 SQL-Powered Data Analyzer")
 st.write("Upload an Excel or CSV file to **explore, clean, visualize, and query with SQL!**")
@@ -92,4 +92,3 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"🚨 An error occurred: {str(e)}")
-
