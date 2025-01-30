@@ -1,13 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import snowflake.connector
 from io import BytesIO
-import sqlite3
-from sqlalchemy import create_engine
 import hashlib
 import datetime
-import glob
 import os
 import base64
 from graphviz import Digraph
@@ -28,6 +24,8 @@ if 'data_versions' not in st.session_state:
     st.session_state.data_versions = {}
 if 'audit_log' not in st.session_state:
     st.session_state.audit_log = []
+if 'join_sequence' not in st.session_state:
+    st.session_state.join_sequence = []
 
 # ======== Utility Functions ========
 def create_in_memory_db():
@@ -39,6 +37,9 @@ def create_in_memory_db():
 def log_audit(action):
     timestamp = datetime.datetime.now().isoformat()
     st.session_state.audit_log.append(f"{timestamp} | {action}")
+
+def get_common_columns(df1, df2):
+    return list(set(df1.columns) & set(df2.columns))
 
 # ======== Sidebar ========
 with st.sidebar:
@@ -68,15 +69,6 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Error loading {file.name}: {str(e)}")
 
-    # Advanced Tools
-    st.subheader("🔧 DataForge Tools")
-    tool_choice = st.selectbox("Select Tool", [
-        "Data Lineage Visualizer",
-        "Schema Evolution Tracker",
-        "Data Checksum Validator",
-        "Bulk Data Ops"
-    ])
-
 # ======== Main Interface ========
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🌐 Data Explorer", 
@@ -89,10 +81,8 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:  # Data Explorer
     st.subheader("🌐 Multi-Dataset Explorer")
     
-    # Dataset Selector
-    selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
-    
-    if selected_ds:
+    if st.session_state.datasets:
+        selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
         df = st.session_state.datasets[selected_ds]
         
         # Advanced DataFrame Profiling
@@ -122,35 +112,99 @@ with tab1:  # Data Explorer
                                          range(len(st.session_state.data_versions[selected_ds])))
             st.write(f"Version {version_compare} Preview")
             st.dataframe(st.session_state.data_versions[selected_ds][version_compare].head())
+    else:
+        st.warning("No datasets uploaded yet!")
 
 with tab2:  # Data Ops
     st.subheader("🛠 Advanced Data Operations")
     
-    # Cross-Dataset Joins
-    with st.expander("🔗 Data Fusion (Join Datasets)"):
-        ds1 = st.selectbox("Primary Dataset", list(st.session_state.datasets.keys()))
-        ds2 = st.selectbox("Secondary Dataset", list(st.session_state.datasets.keys()))
-        join_type = st.selectbox("Join Type", ["inner", "left", "right", "outer"])
-        join_key = st.selectbox("Join Key", list(set(st.session_state.datasets[ds1].columns) & 
-                                               set(st.session_state.datasets[ds2].columns)))
-        if st.button("Fuse Datasets"):
-            merged = pd.merge(st.session_state.datasets[ds1], 
-                            st.session_state.datasets[ds2], 
-                            on=join_key, 
-                            how=join_type)
-            new_name = f"{ds1}_X_{ds2}"
-            st.session_state.datasets[new_name] = merged
-            st.session_state.data_versions[new_name] = [merged.copy()]
-            log_audit(f"Merged {ds1} with {ds2} as {new_name}")
-    
+    # Multi-Dataset Joins
+    with st.expander("🔗 Data Fusion (Join N Datasets)"):
+        # Join sequence management
+        col1, col2 = st.columns([3,1])
+        with col1:
+            new_dataset = st.selectbox("Add Dataset to Join", 
+                                     list(st.session_state.datasets.keys()))
+        with col2:
+            st.write("##")
+            if st.button("➕ Add to Join Sequence"):
+                if new_dataset not in [ds['name'] for ds in st.session_state.join_sequence]:
+                    st.session_state.join_sequence.append({
+                        'name': new_dataset,
+                        'join_type': 'inner',
+                        'key': None
+                    })
+        
+        # Display and configure join sequence
+        if st.session_state.join_sequence:
+            st.write("### Join Sequence Configuration")
+            final_name = "_X_".join([ds['name'] for ds in st.session_state.join_sequence])
+            
+            for i, ds in enumerate(st.session_state.join_sequence):
+                cols = st.columns([2,2,4,1])
+                with cols[0]:
+                    st.write(f"**Dataset {i+1}:** {ds['name']}")
+                if i > 0:
+                    with cols[1]:
+                        ds['join_type'] = st.selectbox(
+                            f"Join Type {i+1}",
+                            ["inner", "left", "right", "outer"],
+                            key=f"jt_{i}"
+                        )
+                    with cols[2]:
+                        available_keys = get_common_columns(
+                            st.session_state.datasets[st.session_state.join_sequence[i-1]['name']],
+                            st.session_state.datasets[ds['name']]
+                        )
+                        if available_keys:
+                            ds['key'] = st.selectbox(
+                                f"Join Key {i+1}",
+                                available_keys,
+                                key=f"jk_{i}"
+                            )
+                        else:
+                            st.error("No common columns between datasets!")
+                
+            if st.button("🔗 Execute Multi-Join"):
+                try:
+                    # Start with first dataset
+                    merged = st.session_state.datasets[st.session_state.join_sequence[0]['name']].copy()
+                    
+                    # Iteratively join subsequent datasets
+                    for i in range(1, len(st.session_state.join_sequence)):
+                        current_ds = st.session_state.join_sequence[i]
+                        right_df = st.session_state.datasets[current_ds['name']]
+                        
+                        merged = pd.merge(
+                            left=merged,
+                            right=right_df,
+                            how=current_ds['join_type'],
+                            on=current_ds['key']
+                        )
+                    
+                    # Save final merged dataset
+                    st.session_state.datasets[final_name] = merged
+                    st.session_state.data_versions[final_name] = [merged.copy()]
+                    log_audit(f"Merged {len(st.session_state.join_sequence)} datasets as {final_name}")
+                    st.success(f"Successfully created merged dataset: {final_name}")
+                    st.session_state.join_sequence = []
+                except Exception as e:
+                    st.error(f"Merge Error: {str(e)}")
+            
+            if st.button("🔄 Clear Join Sequence"):
+                st.session_state.join_sequence = []
+
     # Data Version Control
     with st.expander("🕰️ Time Machine"):
-        selected_ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
-        versions = list(range(len(st.session_state.data_versions[selected_ds])))
-        selected_version = st.select_slider("Select Version", options=versions)
-        if st.button("Restore This Version"):
-            st.session_state.datasets[selected_ds] = st.session_state.data_versions[selected_ds][selected_version]
-            st.success(f"Restored {selected_ds} to version {selected_version}")
+        if st.session_state.datasets:
+            selected_ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
+            versions = list(range(len(st.session_state.data_versions[selected_ds])))
+            selected_version = st.select_slider("Select Version", options=versions)
+            if st.button("Restore This Version"):
+                st.session_state.datasets[selected_ds] = st.session_state.data_versions[selected_ds][selected_version]
+                st.success(f"Restored {selected_ds} to version {selected_version}")
+        else:
+            st.warning("No datasets available")
 
 with tab3:  # SQL Studio
     st.subheader("🔍 Cross-Dataset SQL Studio")
@@ -202,26 +256,6 @@ with tab4:  # Audit Trail
 with tab5:  # Deployment
     st.subheader("🚀 Enterprise Deployment")
     
-    # Snowflake Integration
-    with st.expander("❄️ Snowflake Cloud Sync"):
-        sf_config = {
-            'user': st.text_input("Username"),
-            'password': st.text_input("Password", type="password"),
-            'account': st.text_input("Account URL"),
-            'warehouse': st.text_input("Warehouse"),
-            'database': st.text_input("Database"),
-            'schema': st.text_input("Schema")
-        }
-        
-        if st.button("☁️ Full Deployment to Snowflake"):
-            try:
-                conn = snowflake.connector.connect(**sf_config)
-                for name, df in st.session_state.datasets.items():
-                    df.to_sql(name, conn, if_exists='replace', index=False)
-                st.success("All datasets deployed to Snowflake!")
-            except Exception as e:
-                st.error(f"Deployment Error: {str(e)}")
-    
     # Bulk Export
     with st.expander("📤 Export All Data"):
         export_format = st.selectbox("Format", ["ZIP (CSV)", "ZIP (Excel)", "SQLite DB"])
@@ -243,8 +277,3 @@ with tab5:  # Deployment
                         zip_file.writestr("data.db", db_buffer.getvalue())
             st.download_button("Download Package", zip_buffer.getvalue(), "data_package.zip")
 
-# ======== Requirements ========
-st.sidebar.divider()
-st.sidebar.download_button("📦 Download Requirements", 
-                         text="streamlit==1.29.0\npandas==2.1.4\nplotly==5.18.0\nsnowflake-connector-python==3.6.0\nsqlalchemy==2.0.23\ngraphviz==0.20.1\nopenpyxl==3.1.2\nxlsxwriter==3.1.9\npython-magic==0.4.27", 
-                         file_name="requirements.txt")
