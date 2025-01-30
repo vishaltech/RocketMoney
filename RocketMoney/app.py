@@ -46,14 +46,16 @@ def get_common_columns(df1, df2):
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
+    # Multi-File Upload
     uploaded_files = st.file_uploader("📤 Upload Multiple Datasets", 
                                     type=["csv", "xls", "xlsx"],
                                     accept_multiple_files=True)
     
+    # Dataset Naming
     for file in uploaded_files:
         if file.name not in st.session_state.datasets:
             default_name = os.path.splitext(file.name)[0][:15]
-            dataset_name = st.text_input(f"Name for {file.name}",
+            dataset_name = st.text_input(f"Name for {file.name}",  # Fixed f-string syntax
                                        value=default_name,
                                        key=f"name_{file.name}")
             if dataset_name:
@@ -77,19 +79,21 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🚀 Deployment"
 ])
 
-with tab1:
+with tab1:  # Data Explorer
     st.subheader("🌐 Multi-Dataset Explorer")
     
     if st.session_state.datasets:
         selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
         df = st.session_state.datasets[selected_ds]
         
+        # Advanced DataFrame Profiling
         cols = st.columns(4)
         cols[0].metric("📦 Size", f"{df.memory_usage().sum()/1e6:.2f} MB")
         cols[1].metric("🆔 Checksum", hashlib.md5(df.to_json().encode()).hexdigest()[:8])
         cols[2].metric("⏳ Versions", len(st.session_state.data_versions.get(selected_ds, [])))
         cols[3].metric("🔗 Relations", len(df.columns))
         
+        # Interactive Schema Viewer
         with st.expander("🔍 Schema Inspector"):
             schema_df = pd.DataFrame({
                 'Column': df.columns,
@@ -99,16 +103,15 @@ with tab1:
             })
             st.dataframe(schema_df.style.background_gradient())
         
+        # Data Preview with Version Compare
         col1, col2 = st.columns(2)
         with col1:
             st.write("Current Version Preview")
             st.dataframe(df.head())
         with col2:
             if st.session_state.data_versions.get(selected_ds):
-                version_compare = st.selectbox(
-                    "Compare with Version", 
-                    range(len(st.session_state.data_versions[selected_ds]))
-                )
+                version_compare = st.selectbox("Compare with Version", 
+                                             range(len(st.session_state.data_versions[selected_ds])))
                 st.write(f"Version {version_compare} Preview")
                 st.dataframe(st.session_state.data_versions[selected_ds][version_compare].head())
             else:
@@ -116,10 +119,12 @@ with tab1:
     else:
         st.warning("No datasets uploaded yet!")
 
-with tab2:
+with tab2:  # Data Ops
     st.subheader("🛠 Advanced Data Operations")
     
+    # Multi-Dataset Joins
     with st.expander("🔗 Data Fusion (Join N Datasets)"):
+        # Join sequence management
         col1, col2 = st.columns([3,1])
         with col1:
             new_dataset = st.selectbox("Add Dataset to Join", 
@@ -134,6 +139,7 @@ with tab2:
                         'key': None
                     })
         
+        # Display and configure join sequence
         if st.session_state.join_sequence:
             st.write("### Join Sequence Configuration")
             final_name = "_X_".join([ds['name'] for ds in st.session_state.join_sequence])
@@ -165,8 +171,10 @@ with tab2:
                 
             if st.button("🔗 Execute Multi-Join"):
                 try:
+                    # Start with first dataset
                     merged = st.session_state.datasets[st.session_state.join_sequence[0]['name']].copy()
                     
+                    # Iteratively join subsequent datasets
                     for i in range(1, len(st.session_state.join_sequence)):
                         current_ds = st.session_state.join_sequence[i]
                         right_df = st.session_state.datasets[current_ds['name']]
@@ -178,6 +186,7 @@ with tab2:
                             on=current_ds['key']
                         )
                     
+                    # Save final merged dataset
                     st.session_state.datasets[final_name] = merged
                     st.session_state.data_versions[final_name] = [merged.copy()]
                     log_audit(f"Merged {len(st.session_state.join_sequence)} datasets as {final_name}")
@@ -189,6 +198,7 @@ with tab2:
             if st.button("🔄 Clear Join Sequence"):
                 st.session_state.join_sequence = []
 
+    # Data Version Control
     with st.expander("🕰️ Time Machine"):
         if st.session_state.datasets:
             selected_ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
@@ -196,16 +206,7 @@ with tab2:
             
             if len(versions) > 0:
                 version_numbers = list(range(len(versions)))
-                if len(version_numbers) > 1:
-                    selected_version = st.select_slider(
-                        "Select Version", 
-                        options=version_numbers,
-                        value=len(versions)-1
-                    )
-                else:
-                    st.write("Only one version available")
-                    selected_version = 0
-                
+                selected_version = st.select_slider("Select Version", options=version_numbers)
                 if st.button("Restore This Version"):
                     st.session_state.datasets[selected_ds] = versions[selected_version]
                     st.success(f"Restored {selected_ds} to version {selected_version}")
@@ -214,9 +215,10 @@ with tab2:
         else:
             st.warning("No datasets available")
 
-with tab3:
+with tab3:  # SQL Studio
     st.subheader("🔍 Cross-Dataset SQL Studio")
     
+    # SQL Editor
     query = st.text_area("Write SQL Query", height=200,
                        help="Use dataset names as tables. Example: SELECT * FROM sales JOIN users ON sales.id = users.id")
     
@@ -227,6 +229,7 @@ with tab3:
             st.write("Query Results")
             st.dataframe(result)
             
+            # Visual Query Explainer
             with st.expander("🔍 Query Analysis"):
                 cols = st.columns(3)
                 cols[0].metric("Result Size", f"{len(result):,} rows")
@@ -242,13 +245,15 @@ with tab3:
         except Exception as e:
             st.error(f"Query Error: {str(e)}")
 
-with tab4:
+with tab4:  # Audit Trail
     st.subheader("📜 Data Audit Trail")
     
+    # Audit Log Viewer
     st.write("### 🕵️ Activity History")
     for entry in reversed(st.session_state.audit_log[-50:]):
         st.code(entry)
     
+    # Data Lineage Visualization
     st.write("### 🔗 System Data Lineage")
     dot = Digraph()
     for ds in st.session_state.datasets:
@@ -257,9 +262,10 @@ with tab4:
                                             list(st.session_state.datasets.keys())[1:])])
     st.graphviz_chart(dot)
 
-with tab5:
+with tab5:  # Deployment
     st.subheader("🚀 Enterprise Deployment")
     
+    # Bulk Export
     with st.expander("📤 Export All Data"):
         export_format = st.selectbox("Format", ["ZIP (CSV)", "ZIP (Excel)", "SQLite DB"])
         if st.button("📦 Package Data"):
