@@ -285,4 +285,3 @@ with tab5:  # Deployment
                         df.to_sql(name, engine, index=False, if_exists='replace')
                         zip_file.writestr("data.db", db_buffer.getvalue())
             st.download_button("Download Package", zip_buffer.getvalue(), "data_package.zip")
-
