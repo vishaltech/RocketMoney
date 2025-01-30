@@ -51,24 +51,46 @@ with st.sidebar:
                                     type=["csv", "xls", "xlsx"],
                                     accept_multiple_files=True)
     
-    # Dataset Naming
+    # Process uploaded files
     for file in uploaded_files:
-        if file.name not in st.session_state.datasets:
-            default_name = os.path.splitext(file.name)[0][:15]
-            dataset_name = st.text_input(f"Name for {file.name}",  # Fixed f-string syntax
-                                       value=default_name,
-                                       key=f"name_{file.name}")
-            if dataset_name:
-                try:
-                    if file.name.endswith('.csv'):
+        try:
+            if file.name not in st.session_state.datasets:
+                if file.name.endswith('.csv'):
+                    # Handle CSV files
+                    default_name = os.path.splitext(file.name)[0][:15]
+                    dataset_name = st.text_input(f"Name for {file.name}", 
+                                               value=default_name,
+                                               key=f"csv_{file.name}")
+                    if dataset_name:
                         df = pd.read_csv(file)
-                    else:
-                        df = pd.read_excel(file)
-                    st.session_state.datasets[dataset_name] = df
-                    st.session_state.data_versions[dataset_name] = [df.copy()]
-                    log_audit(f"Dataset Added: {dataset_name}")
-                except Exception as e:
-                    st.error(f"Error loading {file.name}: {str(e)}")
+                        st.session_state.datasets[dataset_name] = df
+                        st.session_state.data_versions[dataset_name] = [df.copy()]
+                        log_audit(f"CSV Dataset Added: {dataset_name}")
+                else:
+                    # Handle Excel files with multiple sheets
+                    with pd.ExcelFile(file) as xls:
+                        sheet_names = xls.sheet_names
+                    
+                    selected_sheets = st.multiselect(
+                        f"Select sheets from {file.name}",
+                        sheet_names,
+                        key=f"sheets_{file.name}"
+                    )
+                    
+                    for sheet in selected_sheets:
+                        default_name = f"{os.path.splitext(file.name)[0][:10]}_{sheet}"[:30]
+                        dataset_name = st.text_input(
+                            f"Name for {sheet} in {file.name}",
+                            value=default_name,
+                            key=f"excel_{file.name}_{sheet}"
+                        )
+                        if dataset_name and dataset_name not in st.session_state.datasets:
+                            df = pd.read_excel(file, sheet_name=sheet)
+                            st.session_state.datasets[dataset_name] = df
+                            st.session_state.data_versions[dataset_name] = [df.copy()]
+                            log_audit(f"Excel Dataset Added: {dataset_name} (Sheet: {sheet})")
+        except Exception as e:
+            st.error(f"Error processing {file.name}: {str(e)}")
 
 # ======== Main Interface ========
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
