@@ -2,12 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import sqlite3
-import seaborn as sns
-import matplotlib.pyplot as plt
-import numpy as np
 import io
-import altair as alt
-from fpdf import FPDF
 import openpyxl
 import snowflake.connector
 
@@ -34,74 +29,31 @@ if uploaded_file:
         # Convert column names to SQL-friendly format
         df.columns = [col.replace(" ", "_") for col in df.columns]
 
+        # Infer data types
+        data_types = df.dtypes
+
         # Display Data Preview
         st.write("### 📝 Data Preview")
         st.dataframe(df.head())
 
-        # Column Selection
-        numeric_columns = df.select_dtypes(include=['number']).columns.tolist()
-        categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
-
-        # 🔥 SQL Query Execution
-        st.write(f"### 🛠 Query Your Data with SQL (Table: `{table_name}`)")
-        conn = sqlite3.connect(":memory:")  
-        df.to_sql(table_name, conn, index=False, if_exists="replace")  
-
-        query = st.text_area(f"Write your SQL query for `{table_name}` (e.g., `SELECT * FROM {table_name} LIMIT 10;`)")
-        if st.button("Run SQL Query"):
-            try:
-                query_result = pd.read_sql_query(query, conn)
-                st.write("### 📊 Query Results")
-                st.dataframe(query_result)
-
-                # Allow users to download query results
-                query_file = io.BytesIO()
-                query_result.to_csv(query_file, index=False)
-                query_file.seek(0)
-                st.download_button("📥 Download SQL Query Results", query_file, file_name=f"{table_name}_query_results.csv", mime="text/csv")
-
-            except Exception as e:
-                st.error(f"❌ SQL Error: {str(e)}")
-
-        # 📊 Interactive Data Visualization
-        st.write("### 📊 Interactive Data Visualization")
-        chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Scatter Plot", "Line Chart", "Histogram", "Pie Chart"])
-        x_axis = st.selectbox("Select X-axis", numeric_columns + categorical_columns)
-
-        y_axis = None
-        if chart_type != "Pie Chart":
-            y_axis = st.selectbox("Select Y-axis", numeric_columns)
-
-        if st.button("Generate Chart"):
-            if x_axis:
-                if chart_type == "Bar Chart":
-                    fig = px.bar(df, x=x_axis, y=y_axis, title=f"📊 Bar Chart: {y_axis} vs {x_axis}")
-                elif chart_type == "Scatter Plot":
-                    fig = px.scatter(df, x=x_axis, y=y_axis, title=f"🔬 Scatter Plot: {y_axis} vs {x_axis}")
-                elif chart_type == "Line Chart":
-                    fig = px.line(df, x=x_axis, y=y_axis, title=f"📈 Line Chart: {y_axis} vs {x_axis}")
-                elif chart_type == "Pie Chart":
-                    fig = px.pie(df, names=x_axis, title=f"🍰 Pie Chart: {x_axis}")
-                else:
-                    fig = px.histogram(df, x=x_axis, title=f"📊 Histogram: {x_axis}")
-
-                st.plotly_chart(fig)
-            else:
-                st.warning("⚠️ Please select valid columns for visualization.")
-
-        # ➕ Add Data Manually
+        # Column Selection for Adding Data
         st.write("### ➕ Add New Data")
-        new_data = {}
-        for col in df.columns:
-            new_data[col] = st.text_input(f"Enter value for {col}", "")
+        selected_column = st.selectbox("Select a column to add data", df.columns)
+        selected_data_type = data_types[selected_column]
+
+        # Input for the selected field
+        if selected_data_type in ["int64", "float64"]:
+            new_value = st.number_input(f"Enter value for {selected_column}")
+        else:
+            new_value = st.text_input(f"Enter value for {selected_column}")
 
         if st.button("Add Row"):
-            new_row = pd.DataFrame([new_data])
+            new_row = pd.DataFrame([{selected_column: new_value}])
             df = pd.concat([df, new_row], ignore_index=True)
-            st.success("✅ New row added!")
+            st.success("✅ New data added!")
             st.dataframe(df.tail())
 
-        # 📤 Export Updated Data to Excel
+        # Export Updated Data to Excel
         st.write("### 📤 Export Updated Data to Excel")
         excel_file = io.BytesIO()
         with pd.ExcelWriter(excel_file, engine="openpyxl") as writer:
@@ -109,7 +61,7 @@ if uploaded_file:
         excel_file.seek(0)
         st.download_button("📥 Download Excel File", excel_file, file_name=f"{table_name}_updated.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # ❄️ Push to Snowflake
+        # Push to Snowflake
         st.write("### ❄️ Push Data to Snowflake")
         snowflake_account = st.text_input("🔑 Snowflake Account (e.g., xyz123.snowflakecomputing.com)")
         snowflake_user = st.text_input("👤 Snowflake Username")
@@ -120,7 +72,6 @@ if uploaded_file:
 
         if st.button("Upload to Snowflake"):
             try:
-                # Establish connection
                 conn = snowflake.connector.connect(
                     user=snowflake_user,
                     password=snowflake_password,
@@ -139,8 +90,8 @@ if uploaded_file:
 
                 # Insert data into Snowflake
                 for _, row in df.iterrows():
-                    values = "', '".join(map(str, row.values))
-                    insert_sql = f"INSERT INTO {table_name} VALUES ('{values}');"
+                    values = ", ".join([f"'{str(value)}'" for value in row.values])
+                    insert_sql = f"INSERT INTO {table_name} VALUES ({values});"
                     cur.execute(insert_sql)
 
                 conn.commit()
