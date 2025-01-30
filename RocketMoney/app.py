@@ -8,6 +8,7 @@ import os
 import base64
 from graphviz import Digraph
 import zipfile
+from sqlalchemy import create_engine  # Added missing import
 
 # Page Configuration
 st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
@@ -54,7 +55,7 @@ with st.sidebar:
     for file in uploaded_files:
         if file.name not in st.session_state.datasets:
             default_name = os.path.splitext(file.name)[0][:15]
-            dataset_name = st.text_input(f"Name for {file.name}", 
+            dataset_name = st.text_input(f"Name for {file.name", 
                                        value=default_name,
                                        key=f"name_{file.name}")
             if dataset_name:
@@ -89,7 +90,7 @@ with tab1:  # Data Explorer
         cols = st.columns(4)
         cols[0].metric("📦 Size", f"{df.memory_usage().sum()/1e6:.2f} MB")
         cols[1].metric("🆔 Checksum", hashlib.md5(df.to_json().encode()).hexdigest()[:8])
-        cols[2].metric("⏳ Versions", len(st.session_state.data_versions[selected_ds]))
+        cols[2].metric("⏳ Versions", len(st.session_state.data_versions.get(selected_ds, [])))
         cols[3].metric("🔗 Relations", len(df.columns))
         
         # Interactive Schema Viewer
@@ -108,10 +109,13 @@ with tab1:  # Data Explorer
             st.write("Current Version Preview")
             st.dataframe(df.head())
         with col2:
-            version_compare = st.selectbox("Compare with Version", 
-                                         range(len(st.session_state.data_versions[selected_ds])))
-            st.write(f"Version {version_compare} Preview")
-            st.dataframe(st.session_state.data_versions[selected_ds][version_compare].head())
+            if st.session_state.data_versions.get(selected_ds):
+                version_compare = st.selectbox("Compare with Version", 
+                                             range(len(st.session_state.data_versions[selected_ds])))
+                st.write(f"Version {version_compare} Preview")
+                st.dataframe(st.session_state.data_versions[selected_ds][version_compare].head())
+            else:
+                st.warning("No previous versions available")
     else:
         st.warning("No datasets uploaded yet!")
 
@@ -198,11 +202,16 @@ with tab2:  # Data Ops
     with st.expander("🕰️ Time Machine"):
         if st.session_state.datasets:
             selected_ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
-            versions = list(range(len(st.session_state.data_versions[selected_ds])))
-            selected_version = st.select_slider("Select Version", options=versions)
-            if st.button("Restore This Version"):
-                st.session_state.datasets[selected_ds] = st.session_state.data_versions[selected_ds][selected_version]
-                st.success(f"Restored {selected_ds} to version {selected_version}")
+            versions = st.session_state.data_versions.get(selected_ds, [])
+            
+            if len(versions) > 0:
+                version_numbers = list(range(len(versions)))
+                selected_version = st.select_slider("Select Version", options=version_numbers)
+                if st.button("Restore This Version"):
+                    st.session_state.datasets[selected_ds] = versions[selected_version]
+                    st.success(f"Restored {selected_ds} to version {selected_version}")
+            else:
+                st.warning("No versions available for this dataset")
         else:
             st.warning("No datasets available")
 
@@ -264,16 +273,16 @@ with tab5:  # Deployment
             with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
                 for name, df in st.session_state.datasets.items():
                     if export_format == "ZIP (CSV)":
-                        zip_file.writestr(f"{name}.csv", df.to_csv())
+                        zip_file.writestr(f"{name}.csv", df.to_csv(index=False))
                     elif export_format == "ZIP (Excel)":
                         excel_buffer = BytesIO()
-                        with pd.ExcelWriter(excel_buffer) as writer:
-                            df.to_excel(writer, sheet_name=name)
+                        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                            df.to_excel(writer, sheet_name=name, index=False)
                         zip_file.writestr(f"{name}.xlsx", excel_buffer.getvalue())
                     elif export_format == "SQLite DB":
                         db_buffer = BytesIO()
                         engine = create_engine(f'sqlite:///{db_buffer}')
-                        df.to_sql(name, engine, index=False)
+                        df.to_sql(name, engine, index=False, if_exists='replace')
                         zip_file.writestr("data.db", db_buffer.getvalue())
             st.download_button("Download Package", zip_buffer.getvalue(), "data_package.zip")
 
