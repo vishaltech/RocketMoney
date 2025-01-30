@@ -9,6 +9,7 @@ import base64
 from graphviz import Digraph
 import zipfile
 from sqlalchemy import create_engine
+import re
 
 # Page Configuration
 st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
@@ -27,6 +28,8 @@ if 'audit_log' not in st.session_state:
     st.session_state.audit_log = []
 if 'join_sequence' not in st.session_state:
     st.session_state.join_sequence = []
+if 'lineage' not in st.session_state:
+    st.session_state.lineage = {}
 
 # ======== Utility Functions ========
 def create_in_memory_db():
@@ -42,53 +45,56 @@ def log_audit(action):
 def get_common_columns(df1, df2):
     return list(set(df1.columns) & set(df2.columns))
 
+def extract_tables_from_query(query):
+    # Improved SQL query parsing
+    query = query.lower()
+    tables = re.findall(r'\b(?:from|join)\s+(\w+)', query)
+    return list(set(tables))
+
 # ======== Sidebar ========
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
-    # Multi-File Upload
     uploaded_files = st.file_uploader("📤 Upload Multiple Datasets", 
                                     type=["csv", "xls", "xlsx"],
                                     accept_multiple_files=True)
     
-    # Process uploaded files
     for file in uploaded_files:
         try:
-            if file.name not in st.session_state.datasets:
-                if file.name.endswith('.csv'):
-                    # Handle CSV files
-                    default_name = os.path.splitext(file.name)[0][:15]
-                    dataset_name = st.text_input(f"Name for {file.name}", 
-                                               value=default_name,
-                                               key=f"csv_{file.name}")
-                    if dataset_name:
-                        df = pd.read_csv(file)
+            if file.name.endswith('.csv'):
+                default_name = os.path.splitext(file.name)[0][:15]
+                dataset_name = st.text_input(f"Name for {file.name}", 
+                                           value=default_name,
+                                           key=f"csv_{file.name}")
+                if dataset_name and dataset_name not in st.session_state.datasets:
+                    df = pd.read_csv(file)
+                    st.session_state.datasets[dataset_name] = df
+                    st.session_state.data_versions[dataset_name] = [df.copy()]
+                    log_audit(f"Dataset Added: {dataset_name}")
+                    st.session_state.lineage[dataset_name] = []
+            else:
+                with pd.ExcelFile(file) as xls:
+                    sheet_names = xls.sheet_names
+                
+                selected_sheets = st.multiselect(
+                    f"Select sheets from {file.name}",
+                    sheet_names,
+                    key=f"sheets_{file.name}"
+                )
+                
+                for sheet in selected_sheets:
+                    default_name = f"{os.path.splitext(file.name)[0][:10]}_{sheet}"[:30]
+                    dataset_name = st.text_input(
+                        f"Name for {sheet} in {file.name}",
+                        value=default_name,
+                        key=f"excel_{file.name}_{sheet}"
+                    )
+                    if dataset_name and dataset_name not in st.session_state.datasets:
+                        df = pd.read_excel(file, sheet_name=sheet)
                         st.session_state.datasets[dataset_name] = df
                         st.session_state.data_versions[dataset_name] = [df.copy()]
-                        log_audit(f"CSV Dataset Added: {dataset_name}")
-                else:
-                    # Handle Excel files with multiple sheets
-                    with pd.ExcelFile(file) as xls:
-                        sheet_names = xls.sheet_names
-                    
-                    selected_sheets = st.multiselect(
-                        f"Select sheets from {file.name}",
-                        sheet_names,
-                        key=f"sheets_{file.name}"
-                    )
-                    
-                    for sheet in selected_sheets:
-                        default_name = f"{os.path.splitext(file.name)[0][:10]}_{sheet}"[:30]
-                        dataset_name = st.text_input(
-                            f"Name for {sheet} in {file.name}",
-                            value=default_name,
-                            key=f"excel_{file.name}_{sheet}"
-                        )
-                        if dataset_name and dataset_name not in st.session_state.datasets:
-                            df = pd.read_excel(file, sheet_name=sheet)
-                            st.session_state.datasets[dataset_name] = df
-                            st.session_state.data_versions[dataset_name] = [df.copy()]
-                            log_audit(f"Excel Dataset Added: {dataset_name} (Sheet: {sheet})")
+                        log_audit(f"Dataset Added: {dataset_name}")
+                        st.session_state.lineage[dataset_name] = []
         except Exception as e:
             st.error(f"Error processing {file.name}: {str(e)}")
 
@@ -101,21 +107,19 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🚀 Deployment"
 ])
 
-with tab1:  # Data Explorer
+with tab1:
     st.subheader("🌐 Multi-Dataset Explorer")
     
     if st.session_state.datasets:
         selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
         df = st.session_state.datasets[selected_ds]
         
-        # Advanced DataFrame Profiling
         cols = st.columns(4)
         cols[0].metric("📦 Size", f"{df.memory_usage().sum()/1e6:.2f} MB")
         cols[1].metric("🆔 Checksum", hashlib.md5(df.to_json().encode()).hexdigest()[:8])
         cols[2].metric("⏳ Versions", len(st.session_state.data_versions.get(selected_ds, [])))
         cols[3].metric("🔗 Relations", len(df.columns))
         
-        # Interactive Schema Viewer
         with st.expander("🔍 Schema Inspector"):
             schema_df = pd.DataFrame({
                 'Column': df.columns,
@@ -125,7 +129,6 @@ with tab1:  # Data Explorer
             })
             st.dataframe(schema_df.style.background_gradient())
         
-        # Data Preview with Version Compare
         col1, col2 = st.columns(2)
         with col1:
             st.write("Current Version Preview")
@@ -141,12 +144,10 @@ with tab1:  # Data Explorer
     else:
         st.warning("No datasets uploaded yet!")
 
-with tab2:  # Data Ops
+with tab2:
     st.subheader("🛠 Advanced Data Operations")
     
-    # Multi-Dataset Joins
     with st.expander("🔗 Data Fusion (Join N Datasets)"):
-        # Join sequence management
         col1, col2 = st.columns([3,1])
         with col1:
             new_dataset = st.selectbox("Add Dataset to Join", 
@@ -161,7 +162,6 @@ with tab2:  # Data Ops
                         'key': None
                     })
         
-        # Display and configure join sequence
         if st.session_state.join_sequence:
             st.write("### Join Sequence Configuration")
             final_name = "_X_".join([ds['name'] for ds in st.session_state.join_sequence])
@@ -193,10 +193,9 @@ with tab2:  # Data Ops
                 
             if st.button("🔗 Execute Multi-Join"):
                 try:
-                    # Start with first dataset
                     merged = st.session_state.datasets[st.session_state.join_sequence[0]['name']].copy()
+                    parent_datasets = [st.session_state.join_sequence[0]['name']]
                     
-                    # Iteratively join subsequent datasets
                     for i in range(1, len(st.session_state.join_sequence)):
                         current_ds = st.session_state.join_sequence[i]
                         right_df = st.session_state.datasets[current_ds['name']]
@@ -207,12 +206,13 @@ with tab2:  # Data Ops
                             how=current_ds['join_type'],
                             on=current_ds['key']
                         )
+                        parent_datasets.append(current_ds['name'])
                     
-                    # Save final merged dataset
                     st.session_state.datasets[final_name] = merged
                     st.session_state.data_versions[final_name] = [merged.copy()]
-                    log_audit(f"Merged {len(st.session_state.join_sequence)} datasets as {final_name}")
-                    st.success(f"Successfully created merged dataset: {final_name}")
+                    st.session_state.lineage[final_name] = parent_datasets
+                    log_audit(f"Merged {len(parent_datasets)} datasets as {final_name}")
+                    st.success(f"Created merged dataset: {final_name}")
                     st.session_state.join_sequence = []
                 except Exception as e:
                     st.error(f"Merge Error: {str(e)}")
@@ -220,7 +220,6 @@ with tab2:  # Data Ops
             if st.button("🔄 Clear Join Sequence"):
                 st.session_state.join_sequence = []
 
-    # Data Version Control
     with st.expander("🕰️ Time Machine"):
         if st.session_state.datasets:
             selected_ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
@@ -237,10 +236,9 @@ with tab2:  # Data Ops
         else:
             st.warning("No datasets available")
 
-with tab3:  # SQL Studio
+with tab3:
     st.subheader("🔍 Cross-Dataset SQL Studio")
     
-    # SQL Editor
     query = st.text_area("Write SQL Query", height=200,
                        help="Use dataset names as tables. Example: SELECT * FROM sales JOIN users ON sales.id = users.id")
     
@@ -251,7 +249,6 @@ with tab3:  # SQL Studio
             st.write("Query Results")
             st.dataframe(result)
             
-            # Visual Query Explainer
             with st.expander("🔍 Query Analysis"):
                 cols = st.columns(3)
                 cols[0].metric("Result Size", f"{len(result):,} rows")
@@ -260,34 +257,54 @@ with tab3:  # SQL Studio
                 
                 st.write("Data Lineage")
                 dot = Digraph()
-                for table in pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", engine)['name']:
-                    dot.node(table)
-                dot.edges([(table, 'result') for table in pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", engine)['name']])
+                tables_in_query = extract_tables_from_query(query)
+                
+                for table in tables_in_query:
+                    if table in st.session_state.datasets:
+                        dot.node(table)
+                        if table in st.session_state.lineage:
+                            for parent in st.session_state.lineage[table]:
+                                dot.edge(parent, table)
+                
+                dot.node('result')
+                for table in tables_in_query:
+                    dot.edge(table, 'result')
+                
                 st.graphviz_chart(dot)
+
         except Exception as e:
             st.error(f"Query Error: {str(e)}")
 
-with tab4:  # Audit Trail
+with tab4:
     st.subheader("📜 Data Audit Trail")
     
-    # Audit Log Viewer
     st.write("### 🕵️ Activity History")
     for entry in reversed(st.session_state.audit_log[-50:]):
         st.code(entry)
     
-    # Data Lineage Visualization
     st.write("### 🔗 System Data Lineage")
     dot = Digraph()
+    
+    # Build lineage from recorded relationships
+    all_nodes = set()
+    for child, parents in st.session_state.lineage.items():
+        dot.node(child)
+        all_nodes.add(child)
+        for parent in parents:
+            dot.node(parent)
+            dot.edge(parent, child)
+            all_nodes.add(parent)
+    
+    # Add standalone datasets
     for ds in st.session_state.datasets:
-        dot.node(ds)
-    dot.edges([(ds1, ds2) for ds1, ds2 in zip(list(st.session_state.datasets.keys())[:-1], 
-                                            list(st.session_state.datasets.keys())[1:])])
+        if ds not in all_nodes:
+            dot.node(ds)
+    
     st.graphviz_chart(dot)
 
-with tab5:  # Deployment
+with tab5:
     st.subheader("🚀 Enterprise Deployment")
     
-    # Bulk Export
     with st.expander("📤 Export All Data"):
         export_format = st.selectbox("Format", ["ZIP (CSV)", "ZIP (Excel)", "SQLite DB"])
         if st.button("📦 Package Data"):
