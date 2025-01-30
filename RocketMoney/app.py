@@ -8,9 +8,9 @@ import os
 import base64
 from graphviz import Digraph
 import zipfile
-from sqlalchemy import create_engine  # Added missing import
+from sqlalchemy import create_engine
 
-# Page Configuration
+# ============ PAGE CONFIGURATION ============
 st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
 st.title("🧩 DataForge Pro: Multi-Dimensional Analytics")
 st.write("""
@@ -18,7 +18,7 @@ st.write("""
 *Multi-Source Analysis • Cross-Dataset Querying • Data Lineage • Version Control*
 """)
 
-# ======== Global State ========
+# ============ GLOBAL STATE ============
 if 'datasets' not in st.session_state:
     st.session_state.datasets = {}
 if 'data_versions' not in st.session_state:
@@ -28,49 +28,59 @@ if 'audit_log' not in st.session_state:
 if 'join_sequence' not in st.session_state:
     st.session_state.join_sequence = []
 
-# ======== Utility Functions ========
+# ============ UTILITY FUNCTIONS ============
 def create_in_memory_db():
+    """Create SQLite in-memory database with all datasets"""
     engine = create_engine('sqlite:///:memory:')
     for name, df in st.session_state.datasets.items():
         df.to_sql(name, engine, if_exists='replace', index=False)
     return engine
 
 def log_audit(action):
+    """Track all system activities"""
     timestamp = datetime.datetime.now().isoformat()
     st.session_state.audit_log.append(f"{timestamp} | {action}")
 
 def get_common_columns(df1, df2):
+    """Find matching columns between two dataframes"""
     return list(set(df1.columns) & set(df2.columns))
 
-# ======== Sidebar ========
+# ============ SIDEBAR ============
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
-    # Multi-File Upload
-    uploaded_files = st.file_uploader("📤 Upload Multiple Datasets", 
-                                    type=["csv", "xls", "xlsx"],
-                                    accept_multiple_files=True)
+    # Multi-File Upload with Dynamic Naming
+    uploaded_files = st.file_uploader(
+        "📤 Upload Multiple Datasets", 
+        type=["csv", "xls", "xlsx"],
+        accept_multiple_files=True
+    )
     
-    # Dataset Naming
+    # Process uploaded files
     for file in uploaded_files:
         if file.name not in st.session_state.datasets:
             default_name = os.path.splitext(file.name)[0][:15]
-            dataset_name = st.text_input(f"Name for {file.name", 
-                                       value=default_name,
-                                       key=f"name_{file.name}")
+            dataset_name = st.text_input(
+                f"Name for {file.name}",
+                value=default_name,
+                key=f"name_{file.name}"
+            )
             if dataset_name:
                 try:
+                    # Read file based on type
                     if file.name.endswith('.csv'):
                         df = pd.read_csv(file)
                     else:
                         df = pd.read_excel(file)
+                    
+                    # Store in session state
                     st.session_state.datasets[dataset_name] = df
                     st.session_state.data_versions[dataset_name] = [df.copy()]
                     log_audit(f"Dataset Added: {dataset_name}")
                 except Exception as e:
                     st.error(f"Error loading {file.name}: {str(e)}")
 
-# ======== Main Interface ========
+# ============ MAIN INTERFACE ============
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🌐 Data Explorer", 
     "🛠 Data Ops", 
@@ -110,8 +120,10 @@ with tab1:  # Data Explorer
             st.dataframe(df.head())
         with col2:
             if st.session_state.data_versions.get(selected_ds):
-                version_compare = st.selectbox("Compare with Version", 
-                                             range(len(st.session_state.data_versions[selected_ds])))
+                version_compare = st.selectbox(
+                    "Compare with Version", 
+                    range(len(st.session_state.data_versions[selected_ds]))
+                )
                 st.write(f"Version {version_compare} Preview")
                 st.dataframe(st.session_state.data_versions[selected_ds][version_compare].head())
             else:
@@ -127,8 +139,10 @@ with tab2:  # Data Ops
         # Join sequence management
         col1, col2 = st.columns([3,1])
         with col1:
-            new_dataset = st.selectbox("Add Dataset to Join", 
-                                     list(st.session_state.datasets.keys()))
+            new_dataset = st.selectbox(
+                "Add Dataset to Join", 
+                list(st.session_state.datasets.keys())
+            )
         with col2:
             st.write("##")
             if st.button("➕ Add to Join Sequence"):
@@ -219,8 +233,11 @@ with tab3:  # SQL Studio
     st.subheader("🔍 Cross-Dataset SQL Studio")
     
     # SQL Editor
-    query = st.text_area("Write SQL Query", height=200,
-                       help="Use dataset names as tables. Example: SELECT * FROM sales JOIN users ON sales.id = users.id")
+    query = st.text_area(
+        "Write SQL Query", 
+        height=200,
+        help="Use dataset names as tables. Example: SELECT * FROM sales JOIN users ON sales.id = users.id"
+    )
     
     if st.button("▶️ Execute Query"):
         try:
@@ -284,4 +301,8 @@ with tab5:  # Deployment
                         engine = create_engine(f'sqlite:///{db_buffer}')
                         df.to_sql(name, engine, index=False, if_exists='replace')
                         zip_file.writestr("data.db", db_buffer.getvalue())
-            st.download_button("Download Package", zip_buffer.getvalue(), "data_package.zip")
+            st.download_button(
+                "Download Package", 
+                zip_buffer.getvalue(), 
+                "data_package.zip"
+            )
