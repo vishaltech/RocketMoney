@@ -404,34 +404,47 @@ with tabs[3]:
         st.dataframe(df_ml.head())
         task = st.radio("Select ML Task", ("Classification", "Regression"))
         target = st.selectbox("Select Target Variable", df_ml.columns, key="ml_target")
-        features = st.multiselect("Select Feature Variables", [col for col in df_ml.columns if col != target],
+        features = st.multiselect("Select Feature Variables",
+                                  [col for col in df_ml.columns if col != target],
                                   default=[col for col in df_ml.columns if col != target])
         if st.button("Train Model"):
+            # Get selected data and drop missing values
             ml_data = df_ml[features + [target]].dropna()
             X = ml_data[features]
             y = ml_data[target]
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-            if task == "Classification":
-                clf = RandomForestClassifier(random_state=42)
-                clf.fit(X_train, y_train)
-                y_pred = clf.predict(X_test)
-                acc = accuracy_score(y_test, y_pred)
-                st.success(f"Classification Accuracy: {acc:.2f}")
-                importance = clf.feature_importances_
-                feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
-                st.write("Feature Importances:")
-                st.dataframe(feat_imp)
+            # Convert features to numeric (if possible); for regression, convert target as well
+            X = X.apply(pd.to_numeric, errors='coerce')
+            if task == "Regression":
+                y = pd.to_numeric(y, errors='coerce')
+            # Drop any rows that could not be converted
+            ml_data_numeric = pd.concat([X, y], axis=1).dropna()
+            X = ml_data_numeric[features]
+            y = ml_data_numeric[target]
+            if X.empty or y.empty:
+                st.error("After conversion, no valid numeric data remains. Please check your feature/target selection.")
             else:
-                reg = RandomForestRegressor(random_state=42)
-                reg.fit(X_train, y_train)
-                y_pred = reg.predict(X_test)
-                r2 = r2_score(y_test, y_pred)
-                rmse = mean_squared_error(y_test, y_pred, squared=False)
-                st.success(f"Regression R2 Score: {r2:.2f}, RMSE: {rmse:.2f}")
-                importance = reg.feature_importances_
-                feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
-                st.write("Feature Importances:")
-                st.dataframe(feat_imp)
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                if task == "Classification":
+                    clf = RandomForestClassifier(random_state=42)
+                    clf.fit(X_train, y_train)
+                    y_pred = clf.predict(X_test)
+                    acc = accuracy_score(y_test, y_pred)
+                    st.success(f"Classification Accuracy: {acc:.2f}")
+                    importance = clf.feature_importances_
+                    feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
+                    st.write("Feature Importances:")
+                    st.dataframe(feat_imp)
+                else:
+                    reg = RandomForestRegressor(random_state=42)
+                    reg.fit(X_train, y_train)
+                    y_pred = reg.predict(X_test)
+                    r2 = r2_score(y_test, y_pred)
+                    rmse = mean_squared_error(y_test, y_pred, squared=False)
+                    st.success(f"Regression R2 Score: {r2:.2f}, RMSE: {rmse:.2f}")
+                    importance = reg.feature_importances_
+                    feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
+                    st.write("Feature Importances:")
+                    st.dataframe(feat_imp)
     else:
         st.info("No datasets loaded for ML tasks. Please upload data first.")
 
