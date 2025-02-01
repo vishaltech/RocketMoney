@@ -424,4 +424,59 @@ with tab3:
     else:
         st.info("Enter an SQL query to execute.")
 
-# ---------- Tab 4: A
+# ---------- Tab 4: Audit Trail ----------
+with tab4:
+    st.subheader("📜 Audit Trail")
+    if st.session_state.audit_log:
+        st.write("### System Activity Log")
+        for log_entry in reversed(st.session_state.audit_log):
+            st.code(log_entry)
+    else:
+        st.write("No audit entries yet.")
+
+# ---------- Tab 5: Enterprise Deployment ----------
+with tab5:
+    st.subheader("🚀 Enterprise Deployment")
+    
+    with st.expander("📤 Export Data"):
+        export_format = st.selectbox("Export Format", ["Parquet", "CSV", "JSON", "Excel", "SQLite"])
+        
+        if st.button("Generate Export Package", key="generate_export"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Export each dataset in the chosen format
+                for name, df in st.session_state.datasets.items():
+                    file_path = os.path.join(tmpdir, f"{name}.{export_format.lower()}")
+                    try:
+                        if export_format == "Parquet":
+                            table = pa.Table.from_pandas(df)
+                            pq.write_table(table, file_path)
+                        elif export_format == "CSV":
+                            df.to_csv(file_path, index=False)
+                        elif export_format == "JSON":
+                            df.to_json(file_path, orient="records", lines=True)
+                        elif export_format == "Excel":
+                            df.to_excel(file_path, index=False)
+                        elif export_format == "SQLite":
+                            engine = create_engine(f'sqlite:///{file_path}')
+                            df.to_sql(name, engine, index=False, if_exists='replace')
+                    except Exception as exp:
+                        st.error(f"Error exporting {name}: {exp}")
+                
+                # Create a ZIP package of all exported files
+                zip_path = os.path.join(tmpdir, "data_package.zip")
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for root, _, files in os.walk(tmpdir):
+                        for file in files:
+                            if file != "data_package.zip":
+                                full_path = os.path.join(root, file)
+                                zipf.write(full_path, arcname=file)
+                
+                with open(zip_path, "rb") as f:
+                    st.download_button("Download Package", f.read(), "data_package.zip", key="download_zip")
+    st.info("Deployment tools allow you to export all datasets as a single package.")
+
+# -----------------------
+# Sidebar Status
+# -----------------------
+st.sidebar.markdown("---")
+st.sidebar.write(f"🖥️ System Status: {len(st.session_state.datasets)} datasets loaded")
