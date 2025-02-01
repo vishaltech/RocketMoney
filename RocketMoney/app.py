@@ -17,41 +17,108 @@ from ydata_profiling import ProfileReport
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-# Security Configuration
-ADMIN_PASSWORD = os.getenv("ADMIN_PASS", "DataForge123!")
+# -----------------------
+# User Management Helpers
+# -----------------------
 
-# Page Configuration
-st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
+USERS_FILE = "users.json"
 
-# ======== Authentication ========
+def load_users():
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                users = json.load(f)
+            return users
+        except Exception as e:
+            st.error(f"Error reading users file: {e}")
+            return {}
+    else:
+        return {}
+
+def save_users(users):
+    try:
+        with open(USERS_FILE, "w") as f:
+            json.dump(users, f)
+    except Exception as e:
+        st.error(f"Error saving users file: {e}")
+
+# -----------------------
+# Authentication Function
+# -----------------------
+
 def check_auth():
-    if 'authenticated' not in st.session_state:
+    if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-        
-    if not st.session_state.authenticated:
-        with st.container():
-            st.title("🔒 DataForge Pro Login")
-            password = st.text_input("Enter Access Key:", type="password")
-            if st.button("Authenticate"):
-                if password == ADMIN_PASSWORD:
+
+    if st.session_state.authenticated:
+        return True
+
+    st.title("🔒 DataForge Pro Access")
+
+    # Load current users (if any)
+    users = load_users()
+    
+    # If no users exist, force registration.
+    if not users:
+        st.info("No users registered yet. Please register an account.")
+        auth_mode = "Register"
+    else:
+        auth_mode = st.radio("Choose Authentication Mode", ("Login", "Register"))
+
+    if auth_mode == "Register":
+        st.subheader("Register a New Account")
+        reg_username = st.text_input("Choose a username", key="reg_username")
+        reg_password = st.text_input("Choose an access key", type="password", key="reg_password")
+        reg_confirm = st.text_input("Confirm access key", type="password", key="reg_confirm")
+        if st.button("Register"):
+            if not reg_username or not reg_password:
+                st.error("Please provide both username and access key.")
+            elif reg_password != reg_confirm:
+                st.error("Access key and confirmation do not match.")
+            elif reg_username in users:
+                st.error("Username already exists. Please choose a different one.")
+            else:
+                hashed = hashlib.sha256(reg_password.encode()).hexdigest()
+                users[reg_username] = hashed
+                save_users(users)
+                st.success("Registration successful! Please switch to Login mode below.")
+                st.experimental_rerun()
+                
+    if auth_mode == "Login":
+        st.subheader("Log In")
+        login_username = st.text_input("Username", key="login_username")
+        login_password = st.text_input("Access Key", type="password", key="login_password")
+        if st.button("Login"):
+            if login_username not in users:
+                st.error("User not registered. Please register first.")
+            else:
+                hashed = hashlib.sha256(login_password.encode()).hexdigest()
+                if users[login_username] == hashed:
                     st.session_state.authenticated = True
-                    st.experimental_rerun()  # Use experimental_rerun if st.rerun is not available
+                    st.session_state.username = login_username
+                    st.experimental_rerun()
                 else:
-                    st.error("Invalid access key")
-        return False
-    return True
+                    st.error("Incorrect access key.")
+    return False
 
 if not check_auth():
     st.stop()
 
-# Main App Title
+# -----------------------
+# Main App Setup
+# -----------------------
+
+st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
 st.title("🧩 DataForge Pro: Multi-Dimensional Analytics")
 st.write("""
 **Enterprise-Grade Data Fusion Platform**  
 *Multi-Source Analysis • Cross-Dataset Querying • Data Lineage • Version Control*
 """)
 
-# ======== Enhanced Global State ========
+# -----------------------
+# Global State Initialization
+# -----------------------
+
 if 'datasets' not in st.session_state:
     st.session_state.datasets = {}
 if 'data_versions' not in st.session_state:
@@ -65,7 +132,10 @@ if 'lineage' not in st.session_state:
 if 'query_history' not in st.session_state:
     st.session_state.query_history = []
 
-# ======== Enhanced Utility Functions ========
+# -----------------------
+# Utility Functions
+# -----------------------
+
 def log_audit(action: str):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.audit_log.append(f"{timestamp} - {action}")
@@ -98,7 +168,10 @@ def generate_data_profile(df):
     profile = ProfileReport(df, explorative=True)
     return profile.to_html()
 
-# ======== Sidebar ========
+# -----------------------
+# Sidebar
+# -----------------------
+
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
@@ -127,7 +200,10 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error processing {file.name}: {str(e)}")
 
-# ======== Main Interface Tabs ========
+# -----------------------
+# Main Interface Tabs
+# -----------------------
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🌐 Data Explorer", 
     "🛠 Data Ops", 
@@ -290,7 +366,6 @@ with tab3:
     with col2:
         if st.session_state.query_history:
             selected_query = st.selectbox("History", st.session_state.query_history[:10], key="query_history")
-            # Optionally, you can populate the text_area with the selected history query.
     
     if query:
         try:
@@ -371,6 +446,9 @@ with tab5:
                     st.download_button("Download Package", f.read(), "data_package.zip", key="download_zip")
     st.info("Deployment tools allow you to export all datasets as a single package.")
 
-# ======== Sidebar Status ========
+# -----------------------
+# Sidebar Status
+# -----------------------
+
 st.sidebar.markdown("---")
 st.sidebar.write(f"🖥️ System Status: {len(st.session_state.datasets)} datasets loaded")
