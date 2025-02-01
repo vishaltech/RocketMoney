@@ -7,4 +7,3 @@ SQLAlchemy
 ydata-profiling
 pyarrow
 openpyxl
-setuptools
