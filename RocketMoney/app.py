@@ -6,25 +6,29 @@ from io import BytesIO
 import hashlib
 import datetime
 import os
-import base64
-from graphviz import Digraph
-import zipfile
-from sqlalchemy import create_engine
-import re
 import json
 import tempfile
-from ydata_profiling import ProfileReport
+import zipfile
+from graphviz import Digraph
+from sqlalchemy import create_engine
 import pyarrow as pa
 import pyarrow.parquet as pq
+from ydata_profiling import ProfileReport
 
-# Set page configuration at the very start!
+# Additional ML imports
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import accuracy_score, r2_score, mean_squared_error
+
+# -----------------------
+# Set Page Configuration Early
+# -----------------------
 st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
 
 # -----------------------
 # Helper: Safe Rerun
 # -----------------------
 def safe_rerun():
-    """Try to rerun the app; if not available, do nothing."""
     try:
         st.experimental_rerun()
     except Exception:
@@ -33,7 +37,6 @@ def safe_rerun():
 # -----------------------
 # User Management Helpers
 # -----------------------
-
 USERS_FILE = "users.json"
 
 def load_users():
@@ -59,7 +62,6 @@ def save_users(users):
 # Authentication Function
 # -----------------------
 def check_auth():
-    # Initialize the authentication flag if needed.
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -68,7 +70,6 @@ def check_auth():
 
     st.title("🔒 DataForge Pro Access")
 
-    # Load current users (if any)
     users = load_users()
     
     # If no users exist, force registration.
@@ -118,12 +119,12 @@ if not check_auth():
     st.stop()
 
 # -----------------------
-# Main App Title & Description
+# Main Title & Description
 # -----------------------
 st.title("🧩 DataForge Pro: Multi-Dimensional Analytics")
 st.write("""
 **Enterprise-Grade Data Fusion Platform**  
-*Multi-Source Analysis • Cross-Dataset Querying • Data Lineage • Version Control*
+*Multi-Source Analysis • Cross-Dataset Querying • Data Lineage • Version Control • ML Studio*
 """)
 
 # -----------------------
@@ -135,8 +136,6 @@ if 'data_versions' not in st.session_state:
     st.session_state.data_versions = {}
 if 'audit_log' not in st.session_state:
     st.session_state.audit_log = []
-if 'join_sequence' not in st.session_state:
-    st.session_state.join_sequence = []
 if 'lineage' not in st.session_state:
     st.session_state.lineage = {}
 if 'query_history' not in st.session_state:
@@ -151,17 +150,12 @@ def log_audit(action: str):
 
 @st.cache_data
 def process_uploaded_file(file, _sample_size=1.0):
-    """
-    Processes CSV and Parquet files.
-    (Excel files with multiple sheets are handled separately.)
-    """
     try:
         if file.name.lower().endswith('.csv'):
             df = pd.read_csv(file)
         elif file.name.lower().endswith('.parquet'):
             df = pd.read_parquet(file)
         else:
-            # Fallback (should not reach here for Excel files)
             df = pd.read_excel(file)
         if _sample_size < 1.0:
             df = df.sample(frac=_sample_size)
@@ -181,14 +175,14 @@ def generate_data_profile(df):
     return profile.to_html()
 
 # -----------------------
-# Sidebar
+# Sidebar: Data Upload & Settings
 # -----------------------
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
     with st.expander("📤 Data Upload Settings"):
         sample_size = st.slider("Data Sampling (%)", 1, 100, 100) / 100
-        compression = st.selectbox("Compression", ["None", "gzip", "bz2"])  # (Not currently used)
+        compression = st.selectbox("Compression", ["None", "gzip", "bz2"])  # (Not used here)
     
     uploaded_files = st.file_uploader("Upload Datasets", 
                                       type=["csv", "xls", "xlsx", "parquet"],
@@ -197,15 +191,12 @@ with st.sidebar:
     if uploaded_files:
         for file in uploaded_files:
             try:
-                # If the file is an Excel file, process all worksheets
+                # Process Excel files with multiple sheets
                 if file.name.lower().endswith(('.xls', '.xlsx')):
-                    # Read all sheets as a dictionary {sheet_name: DataFrame}
                     sheets = pd.read_excel(file, sheet_name=None)
                     for sheet_name, df in sheets.items():
-                        # Apply sampling if needed
                         if sample_size < 1.0:
                             df = df.sample(frac=sample_size)
-                        # Generate a default name based on file name and sheet name
                         base_name = os.path.splitext(file.name)[0]
                         default_name = f"{base_name}_{sheet_name}"[:15]
                         dataset_name = st.text_input(
@@ -216,10 +207,9 @@ with st.sidebar:
                         if dataset_name and dataset_name not in st.session_state.datasets:
                             st.session_state.datasets[dataset_name] = df
                             st.session_state.data_versions[dataset_name] = [df.copy()]
-                            st.session_state.lineage[dataset_name] = []
+                            st.session_state.lineage[dataset_name] = ["Initial import"]
                             log_audit(f"Dataset Added: {dataset_name} ({len(df)} rows) from sheet '{sheet_name}' in {file.name}")
                 else:
-                    # For CSV and Parquet files (and fallback Excel)
                     default_name = os.path.splitext(file.name)[0][:15]
                     dataset_name = st.text_input(f"Name for {file.name}", value=default_name, key=f"name_{file.name}")
                     if dataset_name and dataset_name not in st.session_state.datasets:
@@ -227,7 +217,7 @@ with st.sidebar:
                         if df is not None:
                             st.session_state.datasets[dataset_name] = df
                             st.session_state.data_versions[dataset_name] = [df.copy()]
-                            st.session_state.lineage[dataset_name] = []
+                            st.session_state.lineage[dataset_name] = ["Initial import"]
                             log_audit(f"Dataset Added: {dataset_name} ({len(df)} rows)")
             except Exception as e:
                 st.error(f"Error processing {file.name}: {str(e)}")
@@ -235,29 +225,28 @@ with st.sidebar:
 # -----------------------
 # Main Interface Tabs
 # -----------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tabs = st.tabs([
     "🌐 Data Explorer", 
     "🛠 Data Ops", 
     "🔍 SQL Studio", 
+    "🤖 ML Studio", 
+    "🗃 Data Versions", 
+    "🔗 Data Lineage", 
     "📜 Audit Trail",
     "🚀 Deployment"
 ])
 
 # ---------- Tab 1: Data Explorer ----------
-with tab1:
+with tabs[0]:
     st.subheader("🌐 Multi-Dataset Explorer")
-    
     if st.session_state.datasets:
-        selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
+        selected_ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()), key="explorer_ds")
         df = st.session_state.datasets[selected_ds]
-        
-        # Display basic metrics
         cols = st.columns(4)
         cols[0].metric("📦 Size", f"{df.memory_usage().sum()/1e6:.2f} MB")
         cols[1].metric("🆔 Checksum", hashlib.md5(df.to_json().encode()).hexdigest()[:8])
         cols[2].metric("⏳ Versions", len(st.session_state.data_versions.get(selected_ds, [])))
-        cols[3].metric("🔗 Relations", len(df.columns))
-        
+        cols[3].metric("🔗 Columns", len(df.columns))
         with st.expander("🔍 Schema Inspector"):
             schema_df = pd.DataFrame({
                 'Column': df.columns,
@@ -266,22 +255,18 @@ with tab1:
                 'Null %': (df.isnull().mean() * 100).round(2).values
             })
             st.dataframe(schema_df.style.background_gradient())
-            
             if st.button("📊 Generate Data Profile"):
                 profile_html = generate_data_profile(df)
                 st.components.v1.html(profile_html, height=800, scrolling=True)
-        
         col1, col2 = st.columns(2)
         with col1:
-            st.write("Current Version Preview")
+            st.write("Preview:")
             st.dataframe(df.head())
-        
         with col2:
             with st.expander("📈 Advanced Visualization"):
                 x_axis = st.selectbox("X Axis", df.columns, key="viz_x")
                 y_axis = st.selectbox("Y Axis", df.columns, key="viz_y")
                 chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Bar", "Histogram"])
-                
                 if chart_type == "Scatter":
                     fig = px.scatter(df, x=x_axis, y=y_axis)
                 elif chart_type == "Line":
@@ -290,27 +275,23 @@ with tab1:
                     fig = px.bar(df, x=x_axis, y=y_axis)
                 elif chart_type == "Histogram":
                     fig = px.histogram(df, x=x_axis)
-                
                 st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No datasets loaded yet. Please upload data from the sidebar.")
 
-# ---------- Tab 2: Data Operations ----------
-with tab2:
+# ---------- Tab 2: Data Ops (Cleaning, Transformations) ----------
+with tabs[1]:
     st.subheader("🛠 Advanced Data Operations")
-    
     if st.session_state.datasets:
-        selected_ds = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()), key="ds_ops")
+        selected_ds = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()), key="ops_ds")
         df = st.session_state.datasets[selected_ds]
-        
         # Data Cleaning
         with st.expander("🧹 Data Cleaning"):
             st.write("### Missing Value Handling")
             missing_cols = df.columns[df.isnull().any()].tolist()
             if missing_cols:
                 clean_method = st.selectbox("Treatment Method", 
-                                            ["Drop NA", "Fill with Mean", "Fill with Median", 
-                                             "Fill with Mode", "Custom Value"])
+                                            ["Drop NA", "Fill with Mean", "Fill with Median", "Fill with Mode", "Custom Value"])
                 if clean_method == "Drop NA":
                     cleaned = df.dropna()
                 else:
@@ -323,21 +304,18 @@ with tab2:
                     else:
                         fill_value = st.text_input("Enter Custom Fill Value")
                     cleaned = df.fillna(fill_value)
-                
                 if st.button("Apply Cleaning", key="apply_cleaning"):
                     st.session_state.datasets[selected_ds] = cleaned
                     st.session_state.data_versions[selected_ds].append(cleaned.copy())
+                    st.session_state.lineage[selected_ds].append(f"Cleaning: {clean_method}")
                     log_audit(f"Data Cleaning: {selected_ds} - {clean_method}")
                     st.success("Data cleaning applied.")
             else:
-                st.info("No missing values detected in this dataset.")
-            
+                st.info("No missing values detected.")
         # Data Transformations
         with st.expander("🔀 Transformations"):
             transform_type = st.selectbox("Transformation Type",
-                                          ["Filter Rows", "Sort Data", "Rename Columns",
-                                           "Type Conversion", "Custom Function"])
-            
+                                          ["Filter Rows", "Sort Data", "Rename Columns", "Type Conversion", "Custom Function"])
             if transform_type == "Filter Rows":
                 filter_col = st.selectbox("Filter Column", df.columns, key="filter_col")
                 filter_val = st.text_input("Filter Value", key="filter_val")
@@ -345,9 +323,9 @@ with tab2:
                     filtered = df[df[filter_col].astype(str) == filter_val]
                     st.session_state.datasets[selected_ds] = filtered
                     st.session_state.data_versions[selected_ds].append(filtered.copy())
-                    log_audit(f"Filter Applied on {selected_ds} where {filter_col} == {filter_val}")
+                    st.session_state.lineage[selected_ds].append(f"Filter: {filter_col} == {filter_val}")
+                    log_audit(f"Filter Applied on {selected_ds}: {filter_col} == {filter_val}")
                     st.success("Filter applied.")
-            
             elif transform_type == "Type Conversion":
                 convert_col = st.selectbox("Select Column", df.columns, key="convert_col")
                 new_type = st.selectbox("New Data Type", ["str", "int", "float", "datetime", "category"], key="new_type")
@@ -356,55 +334,50 @@ with tab2:
                         df[convert_col] = df[convert_col].astype(new_type)
                         st.session_state.datasets[selected_ds] = df
                         st.session_state.data_versions[selected_ds].append(df.copy())
+                        st.session_state.lineage[selected_ds].append(f"Type Conversion: {convert_col} to {new_type}")
                         log_audit(f"Type Conversion on {selected_ds}: {convert_col} to {new_type}")
                         st.success("Type conversion applied.")
                     except Exception as e:
                         st.error(f"Conversion Error: {str(e)}")
-            
             elif transform_type == "Custom Function":
-                st.write("Enter a code snippet that transforms the dataframe. Make sure to use the variable `df`.")
-                custom_code = st.text_area("Pandas Code", help="For example: df = df[df['col'] > 0]")
+                st.write("Enter a code snippet that transforms the dataframe. Use the variable `df`.")
+                custom_code = st.text_area("Pandas Code", help="e.g., df = df[df['col'] > 0]")
                 if st.button("Execute Code", key="execute_custom"):
                     try:
-                        # Use a local namespace to execute the custom code safely
                         local_namespace = {"df": df, "pd": pd, "np": np}
                         exec(custom_code, local_namespace)
                         if "df" in local_namespace:
                             df_transformed = local_namespace["df"]
                             st.session_state.datasets[selected_ds] = df_transformed
                             st.session_state.data_versions[selected_ds].append(df_transformed.copy())
+                            st.session_state.lineage[selected_ds].append("Custom Transformation")
                             log_audit(f"Custom transformation applied on {selected_ds}")
                             st.success("Custom transformation applied.")
                         else:
-                            st.error("The code did not return a dataframe named 'df'.")
+                            st.error("Code did not produce a dataframe named 'df'.")
                     except Exception as e:
                         st.error(f"Execution Error: {str(e)}")
     else:
         st.info("No datasets loaded to operate on.")
 
 # ---------- Tab 3: SQL Studio ----------
-with tab3:
+with tabs[2]:
     st.subheader("🔍 Cross-Dataset SQL Studio")
-    
     query = st.text_area("Write SQL Query", height=200,
-                         help="Use dataset names as tables. Example: SELECT * FROM sales JOIN users ON sales.id = users.id")
-    
-    col1, col2 = st.columns([3,1])
+                         help="Use dataset names as tables. E.g., SELECT * FROM sales JOIN users ON sales.id = users.id")
+    col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("▶️ Execute Query", key="execute_query"):
             st.session_state.query_history.insert(0, query)
     with col2:
         if st.session_state.query_history:
             selected_query = st.selectbox("History", st.session_state.query_history[:10], key="query_history")
-    
     if query:
         try:
             engine = create_in_memory_db()
             result = pd.read_sql(query, engine)
-            
             st.write("### Query Results")
             st.dataframe(result)
-            
             with st.expander("🔍 Advanced Analysis"):
                 st.write("#### Data Distribution")
                 num_cols = result.select_dtypes(include=np.number).columns
@@ -412,20 +385,96 @@ with tab3:
                     selected_num = st.selectbox("Numeric Column", num_cols, key="numeric_col")
                     fig = px.histogram(result, x=selected_num)
                     st.plotly_chart(fig)
-                
                 st.write("#### Statistical Summary")
                 st.table(result.describe())
-                
                 csv = result.to_csv(index=False).encode('utf-8')
                 st.download_button("Download Results", csv, "query_results.csv", "text/csv")
-                
         except Exception as e:
             st.error(f"Query Error: {str(e)}")
     else:
         st.info("Enter an SQL query to execute.")
 
-# ---------- Tab 4: Audit Trail ----------
-with tab4:
+# ---------- Tab 4: 🤖 ML Studio ----------
+with tabs[3]:
+    st.subheader("🤖 ML Studio")
+    if st.session_state.datasets:
+        ml_dataset = st.selectbox("Select Dataset for ML", list(st.session_state.datasets.keys()), key="ml_dataset")
+        df_ml = st.session_state.datasets[ml_dataset]
+        st.write("Preview of selected dataset:")
+        st.dataframe(df_ml.head())
+        task = st.radio("Select ML Task", ("Classification", "Regression"))
+        target = st.selectbox("Select Target Variable", df_ml.columns, key="ml_target")
+        features = st.multiselect("Select Feature Variables", [col for col in df_ml.columns if col != target],
+                                  default=[col for col in df_ml.columns if col != target])
+        if st.button("Train Model"):
+            ml_data = df_ml[features + [target]].dropna()
+            X = ml_data[features]
+            y = ml_data[target]
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            if task == "Classification":
+                clf = RandomForestClassifier(random_state=42)
+                clf.fit(X_train, y_train)
+                y_pred = clf.predict(X_test)
+                acc = accuracy_score(y_test, y_pred)
+                st.success(f"Classification Accuracy: {acc:.2f}")
+                importance = clf.feature_importances_
+                feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
+                st.write("Feature Importances:")
+                st.dataframe(feat_imp)
+            else:
+                reg = RandomForestRegressor(random_state=42)
+                reg.fit(X_train, y_train)
+                y_pred = reg.predict(X_test)
+                r2 = r2_score(y_test, y_pred)
+                rmse = mean_squared_error(y_test, y_pred, squared=False)
+                st.success(f"Regression R2 Score: {r2:.2f}, RMSE: {rmse:.2f}")
+                importance = reg.feature_importances_
+                feat_imp = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
+                st.write("Feature Importances:")
+                st.dataframe(feat_imp)
+    else:
+        st.info("No datasets loaded for ML tasks. Please upload data first.")
+
+# ---------- Tab 5: 🗃 Data Versions ----------
+with tabs[4]:
+    st.subheader("🗃 Data Versions")
+    if st.session_state.datasets:
+        dv_dataset = st.selectbox("Select Dataset for Versioning", list(st.session_state.datasets.keys()), key="dv_dataset")
+        versions = st.session_state.data_versions.get(dv_dataset, [])
+        if versions:
+            version_options = [f"Version {i} (Shape: {ver.shape[0]}x{ver.shape[1]})" for i, ver in enumerate(versions)]
+            selected_version = st.selectbox("Select a Version", version_options, key="selected_version")
+            version_index = version_options.index(selected_version)
+            st.write(f"Preview of {selected_version}:")
+            st.dataframe(versions[version_index].head())
+            if st.button("Revert to this Version"):
+                st.session_state.datasets[dv_dataset] = versions[version_index].copy()
+                st.success(f"Dataset {dv_dataset} reverted to {selected_version}.")
+        else:
+            st.info("No versions available.")
+    else:
+        st.info("No datasets loaded for versioning.")
+
+# ---------- Tab 6: 🔗 Data Lineage ----------
+with tabs[5]:
+    st.subheader("🔗 Data Lineage")
+    if st.session_state.datasets:
+        lineage_dataset = st.selectbox("Select Dataset for Lineage", list(st.session_state.datasets.keys()), key="lineage_dataset")
+        lineage_steps = st.session_state.lineage.get(lineage_dataset, [])
+        if not lineage_steps:
+            st.info("No lineage information available for this dataset.")
+        else:
+            dot = Digraph(comment=f"Lineage for {lineage_dataset}")
+            dot.node("v0", "v0: Initial")
+            for i, step in enumerate(lineage_steps, start=1):
+                dot.node(f"v{i}", f"v{i}: {step}")
+                dot.edge(f"v{i-1}", f"v{i}")
+            st.graphviz_chart(dot)
+    else:
+        st.info("No datasets loaded for lineage.")
+
+# ---------- Tab 7: 📜 Audit Trail ----------
+with tabs[6]:
     st.subheader("📜 Audit Trail")
     if st.session_state.audit_log:
         st.write("### System Activity Log")
@@ -434,16 +483,13 @@ with tab4:
     else:
         st.write("No audit entries yet.")
 
-# ---------- Tab 5: Enterprise Deployment ----------
-with tab5:
+# ---------- Tab 8: 🚀 Deployment ----------
+with tabs[7]:
     st.subheader("🚀 Enterprise Deployment")
-    
     with st.expander("📤 Export Data"):
         export_format = st.selectbox("Export Format", ["Parquet", "CSV", "JSON", "Excel", "SQLite"])
-        
         if st.button("Generate Export Package", key="generate_export"):
             with tempfile.TemporaryDirectory() as tmpdir:
-                # Export each dataset in the chosen format
                 for name, df in st.session_state.datasets.items():
                     file_path = os.path.join(tmpdir, f"{name}.{export_format.lower()}")
                     try:
@@ -461,8 +507,6 @@ with tab5:
                             df.to_sql(name, engine, index=False, if_exists='replace')
                     except Exception as exp:
                         st.error(f"Error exporting {name}: {exp}")
-                
-                # Create a ZIP package of all exported files
                 zip_path = os.path.join(tmpdir, "data_package.zip")
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
                     for root, _, files in os.walk(tmpdir):
@@ -470,7 +514,6 @@ with tab5:
                             if file != "data_package.zip":
                                 full_path = os.path.join(root, file)
                                 zipf.write(full_path, arcname=file)
-                
                 with open(zip_path, "rb") as f:
                     st.download_button("Download Package", f.read(), "data_package.zip", key="download_zip")
     st.info("Deployment tools allow you to export all datasets as a single package.")
