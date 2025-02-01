@@ -151,15 +151,18 @@ def log_audit(action: str):
 
 @st.cache_data
 def process_uploaded_file(file, _sample_size=1.0):
+    """
+    Processes CSV and Parquet files.
+    (Excel files with multiple sheets are handled separately.)
+    """
     try:
-        if file.name.endswith('.csv'):
+        if file.name.lower().endswith('.csv'):
             df = pd.read_csv(file)
-        elif file.name.endswith('.parquet'):
+        elif file.name.lower().endswith('.parquet'):
             df = pd.read_parquet(file)
         else:
-            # For Excel files (xls, xlsx)
+            # Fallback (should not reach here for Excel files)
             df = pd.read_excel(file)
-            
         if _sample_size < 1.0:
             df = df.sample(frac=_sample_size)
         return df
@@ -194,17 +197,38 @@ with st.sidebar:
     if uploaded_files:
         for file in uploaded_files:
             try:
-                default_name = os.path.splitext(file.name)[0][:15]
-                dataset_name = st.text_input(f"Name for {file.name}", 
-                                             value=default_name,
-                                             key=f"name_{file.name}")
-                if dataset_name and dataset_name not in st.session_state.datasets:
-                    df = process_uploaded_file(file, sample_size)
-                    if df is not None:
-                        st.session_state.datasets[dataset_name] = df
-                        st.session_state.data_versions[dataset_name] = [df.copy()]
-                        st.session_state.lineage[dataset_name] = []
-                        log_audit(f"Dataset Added: {dataset_name} ({len(df)} rows)")
+                # If the file is an Excel file, process all worksheets
+                if file.name.lower().endswith(('.xls', '.xlsx')):
+                    # Read all sheets as a dictionary {sheet_name: DataFrame}
+                    sheets = pd.read_excel(file, sheet_name=None)
+                    for sheet_name, df in sheets.items():
+                        # Apply sampling if needed
+                        if sample_size < 1.0:
+                            df = df.sample(frac=sample_size)
+                        # Generate a default name based on file name and sheet name
+                        base_name = os.path.splitext(file.name)[0]
+                        default_name = f"{base_name}_{sheet_name}"[:15]
+                        dataset_name = st.text_input(
+                            f"Name for sheet '{sheet_name}' in {file.name}",
+                            value=default_name,
+                            key=f"name_{file.name}_{sheet_name}"
+                        )
+                        if dataset_name and dataset_name not in st.session_state.datasets:
+                            st.session_state.datasets[dataset_name] = df
+                            st.session_state.data_versions[dataset_name] = [df.copy()]
+                            st.session_state.lineage[dataset_name] = []
+                            log_audit(f"Dataset Added: {dataset_name} ({len(df)} rows) from sheet '{sheet_name}' in {file.name}")
+                else:
+                    # For CSV and Parquet files (and fallback Excel)
+                    default_name = os.path.splitext(file.name)[0][:15]
+                    dataset_name = st.text_input(f"Name for {file.name}", value=default_name, key=f"name_{file.name}")
+                    if dataset_name and dataset_name not in st.session_state.datasets:
+                        df = process_uploaded_file(file, sample_size)
+                        if df is not None:
+                            st.session_state.datasets[dataset_name] = df
+                            st.session_state.data_versions[dataset_name] = [df.copy()]
+                            st.session_state.lineage[dataset_name] = []
+                            log_audit(f"Dataset Added: {dataset_name} ({len(df)} rows)")
             except Exception as e:
                 st.error(f"Error processing {file.name}: {str(e)}")
 
@@ -256,8 +280,7 @@ with tab1:
             with st.expander("📈 Advanced Visualization"):
                 x_axis = st.selectbox("X Axis", df.columns, key="viz_x")
                 y_axis = st.selectbox("Y Axis", df.columns, key="viz_y")
-                chart_type = st.selectbox("Chart Type", 
-                                          ["Scatter", "Line", "Bar", "Histogram"])
+                chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Bar", "Histogram"])
                 
                 if chart_type == "Scatter":
                     fig = px.scatter(df, x=x_axis, y=y_axis)
@@ -401,60 +424,4 @@ with tab3:
     else:
         st.info("Enter an SQL query to execute.")
 
-# ---------- Tab 4: Audit Trail ----------
-with tab4:
-    st.subheader("📜 Audit Trail")
-    if st.session_state.audit_log:
-        st.write("### System Activity Log")
-        for log_entry in reversed(st.session_state.audit_log):
-            st.code(log_entry)
-    else:
-        st.write("No audit entries yet.")
-
-# ---------- Tab 5: Enterprise Deployment ----------
-with tab5:
-    st.subheader("🚀 Enterprise Deployment")
-    
-    with st.expander("📤 Export Data"):
-        export_format = st.selectbox("Export Format", 
-                                     ["Parquet", "CSV", "JSON", "Excel", "SQLite"])
-        
-        if st.button("Generate Export Package", key="generate_export"):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Export each dataset in the chosen format
-                for name, df in st.session_state.datasets.items():
-                    file_path = os.path.join(tmpdir, f"{name}.{export_format.lower()}")
-                    try:
-                        if export_format == "Parquet":
-                            table = pa.Table.from_pandas(df)
-                            pq.write_table(table, file_path)
-                        elif export_format == "CSV":
-                            df.to_csv(file_path, index=False)
-                        elif export_format == "JSON":
-                            df.to_json(file_path, orient="records", lines=True)
-                        elif export_format == "Excel":
-                            df.to_excel(file_path, index=False)
-                        elif export_format == "SQLite":
-                            engine = create_engine(f'sqlite:///{file_path}')
-                            df.to_sql(name, engine, index=False, if_exists='replace')
-                    except Exception as exp:
-                        st.error(f"Error exporting {name}: {exp}")
-                
-                # Create a ZIP package of all exported files
-                zip_path = os.path.join(tmpdir, "data_package.zip")
-                with zipfile.ZipFile(zip_path, 'w') as zipf:
-                    for root, _, files in os.walk(tmpdir):
-                        for file in files:
-                            if file != "data_package.zip":
-                                full_path = os.path.join(root, file)
-                                zipf.write(full_path, arcname=file)
-                
-                with open(zip_path, "rb") as f:
-                    st.download_button("Download Package", f.read(), "data_package.zip", key="download_zip")
-    st.info("Deployment tools allow you to export all datasets as a single package.")
-
-# -----------------------
-# Sidebar Status
-# -----------------------
-st.sidebar.markdown("---")
-st.sidebar.write(f"🖥️ System Status: {len(st.session_state.datasets)} datasets loaded")
+# ---------- Tab 4: A
