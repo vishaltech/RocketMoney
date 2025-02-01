@@ -17,6 +17,19 @@ from ydata_profiling import ProfileReport
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# Set page configuration at the very start!
+st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
+
+# -----------------------
+# Helper: Safe Rerun
+# -----------------------
+def safe_rerun():
+    """Try to rerun the app; if not available, do nothing."""
+    try:
+        st.experimental_rerun()
+    except Exception:
+        pass
+
 # -----------------------
 # User Management Helpers
 # -----------------------
@@ -45,8 +58,8 @@ def save_users(users):
 # -----------------------
 # Authentication Function
 # -----------------------
-
 def check_auth():
+    # Initialize the authentication flag if needed.
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -82,7 +95,7 @@ def check_auth():
                 users[reg_username] = hashed
                 save_users(users)
                 st.success("Registration successful! Please switch to Login mode below.")
-                st.experimental_rerun()
+                safe_rerun()
                 
     if auth_mode == "Login":
         st.subheader("Log In")
@@ -96,7 +109,7 @@ def check_auth():
                 if users[login_username] == hashed:
                     st.session_state.authenticated = True
                     st.session_state.username = login_username
-                    st.experimental_rerun()
+                    safe_rerun()
                 else:
                     st.error("Incorrect access key.")
     return False
@@ -105,10 +118,8 @@ if not check_auth():
     st.stop()
 
 # -----------------------
-# Main App Setup
+# Main App Title & Description
 # -----------------------
-
-st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
 st.title("🧩 DataForge Pro: Multi-Dimensional Analytics")
 st.write("""
 **Enterprise-Grade Data Fusion Platform**  
@@ -118,7 +129,6 @@ st.write("""
 # -----------------------
 # Global State Initialization
 # -----------------------
-
 if 'datasets' not in st.session_state:
     st.session_state.datasets = {}
 if 'data_versions' not in st.session_state:
@@ -135,7 +145,6 @@ if 'query_history' not in st.session_state:
 # -----------------------
 # Utility Functions
 # -----------------------
-
 def log_audit(action: str):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.audit_log.append(f"{timestamp} - {action}")
@@ -171,7 +180,6 @@ def generate_data_profile(df):
 # -----------------------
 # Sidebar
 # -----------------------
-
 with st.sidebar:
     st.header("⚙️ DataForge Console")
     
@@ -203,7 +211,6 @@ with st.sidebar:
 # -----------------------
 # Main Interface Tabs
 # -----------------------
-
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🌐 Data Explorer", 
     "🛠 Data Ops", 
@@ -449,6 +456,5 @@ with tab5:
 # -----------------------
 # Sidebar Status
 # -----------------------
-
 st.sidebar.markdown("---")
 st.sidebar.write(f"🖥️ System Status: {len(st.session_state.datasets)} datasets loaded")
