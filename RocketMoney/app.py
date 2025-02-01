@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 import re
 import json
 import tempfile
-from pandas_profiling import ProfileReport
+from ydata_profiling import ProfileReport  # Changed import
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -36,7 +36,7 @@ def check_auth():
             if st.button("Authenticate"):
                 if password == ADMIN_PASSWORD:
                     st.session_state.authenticated = True
-                    st.experimental_rerun()
+                    st.rerun()  # Updated from experimental_rerun()
                 else:
                     st.error("Invalid access key")
         return False
@@ -67,11 +67,17 @@ if 'query_history' not in st.session_state:
     st.session_state.query_history = []
 
 # ======== Enhanced Utility Functions ========
+def log_audit(action: str):  # Added missing audit log function
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.audit_log.append(f"{timestamp} - {action}")
+
 @st.cache_data
 def process_uploaded_file(file, _sample_size=1.0):
     try:
         if file.name.endswith('.csv'):
             df = pd.read_csv(file)
+        elif file.name.endswith('.parquet'):
+            df = pd.read_parquet(file)
         else:
             df = pd.read_excel(file)
             
@@ -281,6 +287,15 @@ with tab3:
                 
         except Exception as e:
             st.error(f"Query Error: {str(e)}")
+
+with tab4:  # Added missing Audit Trail tab implementation
+    st.subheader("📜 Audit Trail")
+    if st.session_state.audit_log:
+        st.write("### System Activity Log")
+        for log_entry in reversed(st.session_state.audit_log):
+            st.code(log_entry)
+    else:
+        st.write("No audit entries yet")
 
 with tab5:
     st.subheader("🚀 Enterprise Deployment")
