@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from pandas_profiling import ProfileReport
+# Replace pandas_profiling with ydata_profiling
+from ydata_profiling import ProfileReport
+
 import hashlib
 import json
 import os
@@ -66,14 +68,12 @@ class AuthSystem:
             st.title("🔒 DataForge Pro Login")
             users = self._load_users()
 
-            # Simple container without border
             with st.container():
                 col1, col2 = st.columns([1, 2])
                 with col1:
                     st.image("https://via.placeholder.com/150", width=100)
                 with col2:
-                    # If you use an older Streamlit version and get an error with `horizontal=True`,
-                    # remove it or upgrade Streamlit to v1.16.0 or later.
+                    # If you see an error with horizontal=True, remove it or upgrade Streamlit.
                     auth_mode = st.radio("Mode", ["Login", "Register"], horizontal=True)
 
                 username = st.text_input("Username")
@@ -473,8 +473,7 @@ class MLProcessor:
                     X = df.drop(columns=[target])
                     y = df[target]
 
-                    # Convert non-numerical columns if necessary (quick fix for RF)
-                    # A more robust approach would be to do full encoding.
+                    # Convert non-numerical columns if necessary (quick fix)
                     for col in X.select_dtypes(include=['object', 'category']).columns:
                         X[col], _ = X[col].factorize()
 
@@ -488,7 +487,6 @@ class MLProcessor:
                     st.write("### Model Performance")
                     cols = st.columns(len(metrics))
                     for i, (name, fn) in enumerate(metrics.items()):
-                        # For classification metrics that need 'average' or 'zero_division':
                         if name in ["precision", "recall"]:
                             val = fn(y_test, y_pred, average='macro', zero_division=0)
                         else:
@@ -503,7 +501,6 @@ class MLProcessor:
                     st.error(f"Training failed: {str(e)}")
 
     def _show_feature_importance(self, model, features):
-        # Not all models have feature_importances_, so check first
         if not hasattr(model, "feature_importances_"):
             st.info("This model does not provide feature importances.")
             return
@@ -555,6 +552,7 @@ def main():
         with tab4:
             dataset = data_manager.dataset_selector("profile")
             if dataset and st.button("Generate Profile Report"):
+                # Use ydata_profiling's ProfileReport
                 pr = ProfileReport(st.session_state.datasets[dataset])
                 st.components.v1.html(pr.to_html(), height=800, scrolling=True)
 
