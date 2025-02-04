@@ -2,31 +2,33 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from ydata_profiling import ProfileReport
-import os
-import json
+import plotly.graph_objects as go
+from pandas_profiling import ProfileReport
 import hashlib
+import json
+import os
 import tempfile
 import joblib
 from datetime import datetime
-from io import BytesIO
-from deepdiff import DeepDiff
-
-# Cloud SDKs
-import boto3
-from snowflake.connector import connect
-from azure.storage.blob import BlobServiceClient
-from google.cloud import storage
-
-# ML Imports
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import accuracy_score, r2_score, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score, 
+    precision_score, 
+    recall_score,
+    r2_score,
+    mean_squared_error
+)
 
 # --------------------------
 # Configuration
 # --------------------------
-st.set_page_config(page_title="DataForge Enterprise", layout="wide", page_icon="🚀")
+st.set_page_config(
+    page_title="DataForge Pro",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # --------------------------
 # Authentication System
@@ -34,84 +36,79 @@ st.set_page_config(page_title="DataForge Enterprise", layout="wide", page_icon="
 class AuthSystem:
     def __init__(self):
         self.users_file = "users.json"
+        self.session_timeout = 3600  # 1 hour
         
-    def hash_password(self, password):
+    def _hash_password(self, password):
         return hashlib.sha256(password.encode()).hexdigest()
     
-    def load_users(self):
+    def _load_users(self):
         try:
             if os.path.exists(self.users_file):
                 with open(self.users_file) as f:
                     return json.load(f)
+            return {}
         except Exception:
             return {}
     
-    def save_users(self, users):
+    def _save_users(self, users):
         with open(self.users_file, "w") as f:
             json.dump(users, f)
     
-    def login(self):
-        if 'authenticated' not in st.session_state:
-            st.session_state.authenticated = False
+    def authenticate(self):
+        if 'auth' not in st.session_state:
+            st.session_state.auth = {
+                'authenticated': False,
+                'username': None,
+                'login_time': None
+            }
             
-        if not st.session_state.authenticated:
-            st.title("🔒 Enterprise Login")
-            users = self.load_users()
+        if not st.session_state.auth['authenticated']:
+            st.title("🔒 DataForge Pro Login")
+            users = self._load_users()
             
-            col1, col2 = st.columns(2)
-            with col1:
+            with st.container(border=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.image("https://via.placeholder.com/150", width=100)
+                with col2:
+                    auth_mode = st.radio("Mode", ["Login", "Register"], horizontal=True)
+                    
                 username = st.text_input("Username")
                 password = st.text_input("Password", type="password")
                 
-            with col2:
-                if st.button("Login"):
-                    if users.get(username) == self.hash_password(password):
-                        st.session_state.authenticated = True
-                        st.session_state.user = username
-                        st.rerun()
+                if st.button(f"{auth_mode}"):
+                    if auth_mode == "Register":
+                        if username and password:
+                            if username not in users:
+                                users[username] = self._hash_password(password)
+                                self._save_users(users)
+                                st.success("Account created! Please login")
+                            else:
+                                st.error("Username already exists")
                     else:
-                        st.error("Invalid credentials")
-                if st.button("Register"):
-                    if username and password:
-                        users[username] = self.hash_password(password)
-                        self.save_users(users)
-                        st.success("Account created! Please login")
+                        if users.get(username) == self._hash_password(password):
+                            st.session_state.auth = {
+                                'authenticated': True,
+                                'username': username,
+                                'login_time': datetime.now()
+                            }
+                            st.rerun()
+                        else:
+                            st.error("Invalid credentials")
             st.stop()
+        else:
+            # Session timeout check
+            elapsed = (datetime.now() - st.session_state.auth['login_time']).total_seconds()
+            if elapsed > self.session_timeout:
+                st.session_state.auth['authenticated'] = False
+                st.warning("Session expired, please login again")
+                st.rerun()
+            return True
 
 # --------------------------
-# Cloud Connection Manager
+# Data Manager
 # --------------------------
-class CloudManager:
-    @staticmethod
-    def get_connection(provider):
-        secrets = st.secrets
-        if provider == "aws":
-            return boto3.client(
-                's3',
-                aws_access_key_id=secrets.aws.access_key,
-                aws_secret_access_key=secrets.aws.secret_key
-            )
-        elif provider == "snowflake":
-            return connect(
-                user=secrets.snowflake.user,
-                password=secrets.snowflake.password,
-                account=secrets.snowflake.account,
-                warehouse=secrets.snowflake.warehouse,
-                database=secrets.snowflake.database
-            )
-        elif provider == "azure":
-            return BlobServiceClient.from_connection_string(
-                secrets.azure.connection_string
-            )
-        elif provider == "gcp":
-            return storage.Client.from_service_account_info(
-                json.loads(secrets.gcp.service_account)
-            )
-
-# --------------------------
-# Data Operations
-# --------------------------
-class DataHandler:
+class DataManager:
     def __init__(self):
         if 'datasets' not in st.session_state:
             st.session_state.datasets = {}
@@ -120,249 +117,390 @@ class DataHandler:
         if 'lineage' not in st.session_state:
             st.session_state.lineage = {}
     
-    def import_data(self, provider, config):
-        try:
-            if provider == "aws":
-                return self._import_aws(config)
-            elif provider == "snowflake":
-                return self._import_snowflake(config)
-            elif provider == "azure":
-                return self._import_azure(config)
-            elif provider == "gcp":
-                return self._import_gcp(config)
-        except Exception as e:
-            st.error(f"Import failed: {str(e)}")
+    def handle_upload(self):
+        with st.sidebar.expander("📤 Data Upload", expanded=True):
+            uploaded_files = st.file_uploader(
+                "Upload datasets",
+                type=["csv", "xlsx", "parquet"],
+                accept_multiple_files=True
+            )
+            
+            for file in uploaded_files:
+                try:
+                    if file.name not in st.session_state.datasets:
+                        df = self._read_file(file)
+                        default_name = os.path.splitext(file.name)[0][:20]
+                        new_name = st.text_input(
+                            f"Name for {file.name}",
+                            value=default_name,
+                            key=f"name_{file.name}"
+                        )
+                        if new_name:
+                            self._store_dataset(new_name, df, f"Uploaded {file.name}")
+                except Exception as e:
+                    st.error(f"Error processing {file.name}: {str(e)}")
     
-    def _import_aws(self, config):
-        s3 = CloudManager.get_connection("aws")
-        response = s3.list_objects_v2(Bucket=config['bucket'], Prefix=config['prefix'])
-        files = [obj['Key'] for obj in response.get('Contents', [])]
-        selected = st.selectbox("Select S3 Object", files)
-        
-        with tempfile.NamedTemporaryFile() as tmp:
-            s3.download_file(config['bucket'], selected, tmp.name)
-            df = pd.read_parquet(tmp) if selected.endswith('.parquet') else pd.read_csv(tmp)
-            return df
+    def _read_file(self, file):
+        if file.name.endswith('.parquet'):
+            return pd.read_parquet(file)
+        elif file.name.endswith('.xlsx'):
+            return pd.read_excel(file)
+        else:
+            return pd.read_csv(file)
     
-    def _import_snowflake(self, config):
-        conn = CloudManager.get_connection("snowflake")
-        query = config['query'] if config['query'] else f"SELECT * FROM {config['table']}"
-        return pd.read_sql(query, conn)
+    def _store_dataset(self, name, df, operation):
+        st.session_state.datasets[name] = df
+        st.session_state.versions[name] = [df.copy()]
+        st.session_state.lineage[name] = [operation]
     
-    def _import_azure(self, config):
-        client = CloudManager.get_connection("azure")
-        container = client.get_container_client(config['container'])
-        blobs = [blob.name for blob in container.list_blobs(name_starts_with=config['prefix'])]
-        selected = st.selectbox("Select Azure Blob", blobs)
-        
-        blob_client = container.get_blob_client(selected)
-        data = blob_client.download_blob().readall()
-        return pd.read_parquet(BytesIO(data)) if selected.endswith('.parquet') else pd.read_csv(BytesIO(data))
-    
-    def _import_gcp(self, config):
-        client = CloudManager.get_connection("gcp")
-        bucket = client.get_bucket(config['bucket'])
-        blobs = list(bucket.list_blobs(prefix=config['prefix']))
-        selected = st.selectbox("Select GCS Object", [blob.name for blob in blobs])
-        
-        blob = bucket.blob(selected)
-        with tempfile.NamedTemporaryFile() as tmp:
-            blob.download_to_filename(tmp.name)
-            return pd.read_parquet(tmp) if selected.endswith('.parquet') else pd.read_csv(tmp)
+    def dataset_selector(self, key):
+        return st.selectbox(
+            "Select Dataset",
+            list(st.session_state.datasets.keys()),
+            key=f"selector_{key}"
+        )
 
 # --------------------------
-# ML Pipeline
+# Data Transformation Engine
+# --------------------------
+class DataTransformer:
+    def __init__(self):
+        self.operations = {
+            "Filter": self._filter_data,
+            "Merge": self._merge_datasets,
+            "Clean": self._clean_data,
+            "Custom": self._custom_transformation
+        }
+    
+    def show_interface(self):
+        with st.expander("🔧 Data Transformations", expanded=True):
+            selected_op = st.selectbox("Select Operation", list(self.operations.keys()))
+            self.operations[selected_op]()
+    
+    def _filter_data(self):
+        dataset = DataManager().dataset_selector("filter")
+        df = st.session_state.datasets[dataset]
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            column = st.selectbox("Column", df.columns, key="filter_col")
+        with col2:
+            operation = st.selectbox("Condition", [
+                "==", "!=", ">", "<", ">=", "<=", 
+                "contains", "is null", "not null"
+            ], key="filter_op")
+        
+        value = None
+        if operation not in ["is null", "not null"]:
+            value = st.text_input("Value", key="filter_val")
+        
+        if st.button("Apply Filter"):
+            try:
+                filtered = self._apply_filter(df, column, operation, value)
+                self._create_version(dataset, filtered, f"Filtered {column} {operation} {value}")
+                st.success(f"Filter applied. New shape: {filtered.shape}")
+            except Exception as e:
+                st.error(f"Filter error: {str(e)}")
+    
+    def _apply_filter(self, df, column, operation, value):
+        if operation == "==":
+            return df[df[column] == value]
+        elif operation == "!=":
+            return df[df[column] != value]
+        elif operation == ">":
+            return df[df[column] > float(value)]
+        elif operation == "<":
+            return df[df[column] < float(value)]
+        elif operation == ">=":
+            return df[df[column] >= float(value)]
+        elif operation == "<=":
+            return df[df[column] <= float(value)]
+        elif operation == "contains":
+            return df[df[column].str.contains(value, na=False)]
+        elif operation == "is null":
+            return df[df[column].isna()]
+        elif operation == "not null":
+            return df[df[column].notna()]
+    
+    def _merge_datasets(self):
+        col1, col2 = st.columns(2)
+        with col1:
+            left_ds = DataManager().dataset_selector("merge_left")
+            left_df = st.session_state.datasets[left_ds]
+            left_key = st.selectbox("Left Key", left_df.columns)
+        with col2:
+            right_ds = DataManager().dataset_selector("merge_right")
+            right_df = st.session_state.datasets[right_ds]
+            right_key = st.selectbox("Right Key", right_df.columns)
+        
+        how = st.selectbox("Merge Type", ["inner", "left", "right", "outer"])
+        new_name = st.text_input("New Dataset Name")
+        
+        if st.button("Merge Datasets"):
+            try:
+                merged = pd.merge(
+                    left_df, right_df, 
+                    left_on=left_key, 
+                    right_on=right_key, 
+                    how=how
+                )
+                self._create_version(new_name, merged, f"Merged {left_ds} and {right_ds}")
+                st.success(f"Merged successfully. New shape: {merged.shape}")
+            except Exception as e:
+                st.error(f"Merge failed: {str(e)}")
+    
+    def _clean_data(self):
+        dataset = DataManager().dataset_selector("clean")
+        df = st.session_state.datasets[dataset]
+        
+        st.write("### Missing Values Handling")
+        missing_cols = df.columns[df.isnull().any()].tolist()
+        if missing_cols:
+            col1, col2 = st.columns(2)
+            with col1:
+                strategy = st.selectbox("Treatment Strategy", [
+                    "Drop rows",
+                    "Fill with mean",
+                    "Fill with median",
+                    "Fill with mode",
+                    "Custom value"
+                ])
+            with col2:
+                fill_value = st.text_input("Custom Value") if strategy == "Custom value" else None
+            
+            if st.button("Clean Data"):
+                cleaned = self._handle_missing(df, strategy, fill_value)
+                self._create_version(dataset, cleaned, f"Cleaned using {strategy}")
+                st.success(f"Cleaning complete. New shape: {cleaned.shape}")
+        else:
+            st.info("No missing values found")
+    
+    def _handle_missing(self, df, strategy, custom_value=None):
+        if strategy == "Drop rows":
+            return df.dropna()
+        elif strategy == "Fill with mean":
+            return df.fillna(df.mean())
+        elif strategy == "Fill with median":
+            return df.fillna(df.median())
+        elif strategy == "Fill with mode":
+            return df.fillna(df.mode().iloc[0])
+        else:
+            return df.fillna(custom_value)
+    
+    def _custom_transformation(self):
+        dataset = DataManager().dataset_selector("custom")
+        df = st.session_state.datasets[dataset]
+        
+        code = st.text_area("Enter Python Code (use 'df' as DataFrame variable)", height=200)
+        if st.button("Execute Code"):
+            try:
+                loc = {"df": df.copy(), "pd": pd, "np": np}
+                exec(code, globals(), loc)
+                new_df = loc.get('df', df)
+                self._create_version(dataset, new_df, "Custom transformation")
+                st.success("Code executed successfully")
+            except Exception as e:
+                st.error(f"Execution error: {str(e)}")
+    
+    def _create_version(self, name, df, operation):
+        st.session_state.datasets[name] = df
+        st.session_state.versions[name].append(df.copy())
+        st.session_state.lineage[name].append(operation)
+
+# --------------------------
+# Visualization Engine
+# --------------------------
+class Visualizer:
+    def show_interface(self):
+        with st.expander("📊 Advanced Visualization", expanded=True):
+            dataset = DataManager().dataset_selector("visualization")
+            df = st.session_state.datasets[dataset]
+            
+            chart_type = st.selectbox("Chart Type", [
+                "Scatter Plot",
+                "Line Chart",
+                "Histogram",
+                "Box Plot",
+                "3D Scatter",
+                "Heatmap"
+            ])
+            
+            if chart_type == "Scatter Plot":
+                self._scatter_plot(df)
+            elif chart_type == "Line Chart":
+                self._line_chart(df)
+            elif chart_type == "Histogram":
+                self._histogram(df)
+            elif chart_type == "Box Plot":
+                self._box_plot(df)
+            elif chart_type == "3D Scatter":
+                self._3d_scatter(df)
+            elif chart_type == "Heatmap":
+                self._heatmap(df)
+    
+    def _scatter_plot(self, df):
+        col1, col2 = st.columns(2)
+        with col1:
+            x = st.selectbox("X Axis", df.columns)
+        with col2:
+            y = st.selectbox("Y Axis", df.columns)
+        
+        color = st.selectbox("Color", [None] + df.columns.tolist())
+        size = st.selectbox("Size", [None] + df.select_dtypes(include=np.number).columns.tolist())
+        
+        fig = px.scatter(df, x=x, y=y, color=color, size=size)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _line_chart(self, df):
+        x = st.selectbox("X Axis", df.columns)
+        y = st.selectbox("Y Axis", df.select_dtypes(include=np.number).columns)
+        color = st.selectbox("Group By", [None] + df.columns.tolist())
+        
+        fig = px.line(df, x=x, y=y, color=color)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _histogram(self, df):
+        col = st.selectbox("Column", df.columns)
+        nbins = st.slider("Number of Bins", 5, 100, 20)
+        color = st.selectbox("Color", [None] + df.columns.tolist())
+        
+        fig = px.histogram(df, x=col, nbins=nbins, color=color)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _box_plot(self, df):
+        y = st.selectbox("Value Column", df.select_dtypes(include=np.number).columns)
+        x = st.selectbox("Category Column", [None] + df.columns.tolist())
+        color = st.selectbox("Color", [None] + df.columns.tolist())
+        
+        fig = px.box(df, x=x, y=y, color=color)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _3d_scatter(self, df):
+        cols = st.columns(3)
+        with cols[0]:
+            x = st.selectbox("X", df.columns)
+        with cols[1]:
+            y = st.selectbox("Y", df.columns)
+        with cols[2]:
+            z = st.selectbox("Z", df.columns)
+        
+        color = st.selectbox("Color", [None] + df.columns.tolist())
+        size = st.selectbox("Size", [None] + df.select_dtypes(include=np.number).columns.tolist())
+        
+        fig = px.scatter_3d(df, x=x, y=y, z=z, color=color, size=size)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _heatmap(self, df):
+        cols = st.multiselect("Select Columns", df.select_dtypes(include=np.number).columns)
+        if cols:
+            corr = df[cols].corr()
+            fig = px.imshow(corr, text_auto=True)
+            st.plotly_chart(fig, use_container_width=True)
+
+# --------------------------
+# Machine Learning Module
 # --------------------------
 class MLProcessor:
-    def train_model(self, df, target, task):
-        X = df.drop(columns=[target])
-        y = df[target]
+    def show_interface(self):
+        with st.expander("🤖 Machine Learning Studio", expanded=True):
+            dataset = DataManager().dataset_selector("ml")
+            df = st.session_state.datasets[dataset]
+            
+            st.write("### Dataset Preview")
+            st.dataframe(df.head(3))
+            
+            target = st.selectbox("Target Variable", df.columns)
+            task = st.selectbox("Task Type", ["Classification", "Regression"])
+            test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
+            
+            if task == "Classification":
+                model = RandomForestClassifier()
+                metrics = {
+                    'accuracy': accuracy_score,
+                    'precision': precision_score,
+                    'recall': recall_score
+                }
+            else:
+                model = RandomForestRegressor()
+                metrics = {
+                    'r2': r2_score,
+                    'mse': mean_squared_error
+                }
+            
+            if st.button("Train Model"):
+                try:
+                    X = df.drop(columns=[target])
+                    y = df[target]
+                    
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, test_size=test_size, random_state=42
+                    )
+                    
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                    
+                    st.write("### Model Performance")
+                    cols = st.columns(len(metrics))
+                    for i, (name, fn) in enumerate(metrics.items()):
+                        cols[i].metric(name.title(), f"{fn(y_test, y_pred):.2f}")
+                    
+                    st.write("### Feature Importance")
+                    self._show_feature_importance(model, X.columns)
+                    
+                    self._save_model(model, f"{task}_{target}")
+                except Exception as e:
+                    st.error(f"Training failed: {str(e)}")
+    
+    def _show_feature_importance(self, model, features):
+        importance = pd.DataFrame({
+            'Feature': features,
+            'Importance': model.feature_importances_
+        }).sort_values('Importance', ascending=False)
         
-        if task == "classification":
-            model = RandomForestClassifier()
-            metric = accuracy_score
-        else:
-            model = RandomForestRegressor()
-            metric = r2_score
-        
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-        score = metric(y_test, preds)
-        
-        return model, score
+        fig = px.bar(importance, x='Importance', y='Feature', orientation='h')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _save_model(self, model, name):
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            joblib.dump(model, tmp.name)
+            st.download_button(
+                "💾 Download Model",
+                data=open(tmp.name, "rb"),
+                file_name=f"{name}_{datetime.now().strftime('%Y%m%d')}.joblib"
+            )
 
 # --------------------------
 # Main Application
 # --------------------------
-class DataForgeApp:
-    def __init__(self):
-        self.auth = AuthSystem()
-        self.data_handler = DataHandler()
-        self.ml = MLProcessor()
+def main():
+    auth = AuthSystem()
+    if auth.authenticate():
+        st.title(f"🧠 DataForge Pro - Welcome {st.session_state.auth['username']}")
         
-    def run(self):
-        self.auth.login()
-        self._setup_sidebar()
-        self._main_interface()
-    
-    def _setup_sidebar(self):
-        with st.sidebar:
-            st.header("☁️ Cloud Connections")
-            self.provider = st.selectbox("Select Provider", ["AWS", "Snowflake", "Azure", "GCP"])
-            
-            with st.expander("Configuration"):
-                self.cloud_config = self._get_provider_config()
-            
-            if st.button("Import Data"):
-                df = self.data_handler.import_data(self.provider.lower(), self.cloud_config)
-                if df is not None:
-                    dataset_name = st.text_input("Dataset Name", value=f"{self.provider}_import")
-                    st.session_state.datasets[dataset_name] = df
-                    st.session_state.versions[dataset_name] = [df.copy()]
-                    st.session_state.lineage[dataset_name] = [f"Imported from {self.provider}"]
-    
-    def _get_provider_config(self):
-        config = {}
-        if self.provider == "AWS":
-            config['bucket'] = st.text_input("S3 Bucket")
-            config['prefix'] = st.text_input("S3 Prefix")
-        elif self.provider == "Snowflake":
-            config['table'] = st.text_input("Table Name")
-            config['query'] = st.text_area("Custom Query")
-        elif self.provider == "Azure":
-            config['container'] = st.text_input("Container Name")
-            config['prefix'] = st.text_input("Blob Prefix")
-        elif self.provider == "GCP":
-            config['bucket'] = st.text_input("GCS Bucket")
-            config['prefix'] = st.text_input("Object Prefix")
-        return config
-    
-    def _main_interface(self):
-        tabs = st.tabs(["Data Explorer", "ML Studio", "Lineage", "Export"])
+        data_manager = DataManager()
+        data_manager.handle_upload()
         
-        with tabs[0]:
-            self._data_explorer()
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Data Transformation", 
+            "Visualization", 
+            "Machine Learning",
+            "Data Profiling"
+        ])
         
-        with tabs[1]:
-            self._ml_studio()
+        with tab1:
+            DataTransformer().show_interface()
         
-        with tabs[2]:
-            self._show_lineage()
+        with tab2:
+            Visualizer().show_interface()
         
-        with tabs[3]:
-            self._export_data()
-    
-    def _data_explorer(self):
-        st.header("🔍 Data Explorer")
-        if st.session_state.datasets:
-            dataset = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()))
-            df = st.session_state.datasets[dataset]
-            
-            cols = st.columns(4)
-            cols[0].metric("Rows", df.shape[0])
-            cols[1].metric("Columns", df.shape[1])
-            cols[2].metric("Memory", f"{df.memory_usage().sum()/1e6:.2f} MB")
-            cols[3].metric("Versions", len(st.session_state.versions[dataset]))
-            
-            with st.expander("Data Profile"):
-                if st.button("Generate Report"):
-                    pr = ProfileReport(df, title=f"{dataset} Profile")
-                    st.components.v1.html(pr.to_html(), height=800, scrolling=True)
-            
-            with st.expander("Data Visualization"):
-                self._visualize_data(df)
-        else:
-            st.info("Import data from the sidebar")
-    
-    def _visualize_data(self, df):
-        x_axis = st.selectbox("X Axis", df.columns)
-        y_axis = st.selectbox("Y Axis", df.columns)
-        chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Histogram"])
+        with tab3:
+            MLProcessor().show_interface()
         
-        if chart_type == "Scatter":
-            fig = px.scatter(df, x=x_axis, y=y_axis)
-        elif chart_type == "Line":
-            fig = px.line(df, x=x_axis, y=y_axis)
-        elif chart_type == "Histogram":
-            fig = px.histogram(df, x=x_axis)
-        
-        st.plotly_chart(fig, use_container_width=True)
-    
-    def _ml_studio(self):
-        st.header("🤖 ML Studio")
-        if st.session_state.datasets:
-            dataset = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()))
-            df = st.session_state.datasets[dataset]
-            
-            target = st.selectbox("Target Variable", df.columns)
-            task = st.selectbox("Task Type", ["Classification", "Regression"])
-            
-            if st.button("Train Model"):
-                model, score = self.ml.train_model(df, target, task.lower())
-                st.session_state.model = model
-                st.success(f"Model trained with score: {score:.2f}")
-                
-                with st.expander("Model Details"):
-                    st.write(model.get_params())
-                    
-                    if hasattr(model, "feature_importances_"):
-                        features = df.drop(columns=[target]).columns
-                        importance = pd.DataFrame({
-                            "Feature": features,
-                            "Importance": model.feature_importances_
-                        }).sort_values("Importance", ascending=False)
-                        fig = px.bar(importance, x="Importance", y="Feature")
-                        st.plotly_chart(fig)
-        else:
-            st.info("Import data first")
-    
-    def _show_lineage(self):
-        st.header("🔗 Data Lineage")
-        if st.session_state.datasets:
-            dataset = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
-            lineage = st.session_state.lineage[dataset]
-            
-            dot = Digraph()
-            for i, step in enumerate(lineage):
-                dot.node(str(i), f"v{i}: {step}")
-                if i > 0:
-                    dot.edge(str(i-1), str(i))
-            st.graphviz_chart(dot)
-    
-    def _export_data(self):
-        st.header("📤 Data Export")
-        if st.session_state.datasets:
-            dataset = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
-            export_format = st.selectbox("Format", ["CSV", "Parquet"])
-            provider = st.selectbox("Destination", ["AWS", "Azure", "GCP"])
-            
-            if st.button("Export"):
-                df = st.session_state.datasets[dataset]
-                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                filename = f"{dataset}_{timestamp}.{export_format.lower()}"
-                
-                with tempfile.NamedTemporaryFile() as tmp:
-                    if export_format == "CSV":
-                        df.to_csv(tmp.name, index=False)
-                    else:
-                        df.to_parquet(tmp.name)
-                    
-                    if provider == "AWS":
-                        s3 = CloudManager.get_connection("aws")
-                        s3.upload_file(tmp.name, self.cloud_config['bucket'], f"{self.cloud_config['prefix']}/{filename}")
-                    elif provider == "Azure":
-                        client = CloudManager.get_connection("azure")
-                        blob = client.get_blob_client(self.cloud_config['container'], f"{self.cloud_config['prefix']}/{filename}")
-                        blob.upload_blob(tmp.read())
-                    elif provider == "GCP":
-                        client = CloudManager.get_connection("gcp")
-                        bucket = client.get_bucket(self.cloud_config['bucket'])
-                        blob = bucket.blob(f"{self.cloud_config['prefix']}/{filename}")
-                        blob.upload_from_filename(tmp.name)
-                    
-                    st.success(f"Exported {filename} to {provider}")
+        with tab4:
+            dataset = data_manager.dataset_selector("profile")
+            if st.button("Generate Profile Report"):
+                pr = ProfileReport(st.session_state.datasets[dataset])
+                st.components.v1.html(pr.to_html(), height=800, scrolling=True)
 
 if __name__ == "__main__":
-    app = DataForgeApp()
-    app.run()
+    main()
