@@ -6,6 +6,7 @@ import json
 import re
 from collections import deque
 import time
+import os
 
 # Selenium & webdriver_manager imports
 from selenium import webdriver
@@ -20,12 +21,23 @@ from webdriver_manager.chrome import ChromeDriverManager
 def init_selenium_driver():
     """
     Creates a headless Selenium Chrome WebDriver using webdriver-manager.
+    It sets the binary location if it detects a known path (e.g. for Chromium on Linux).
     Caches the driver so it's only created once during the app's lifecycle.
     """
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    # Attempt to set the binary location based on common Linux paths.
+    if os.path.exists("/usr/bin/chromium-browser"):
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
+    elif os.path.exists("/usr/bin/google-chrome"):
+        chrome_options.binary_location = "/usr/bin/google-chrome"
+    else:
+        st.warning("Chrome/Chromium binary not found in common locations. "
+                   "Ensure Chrome is installed or set the binary location manually.")
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
@@ -146,10 +158,14 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
             break
 
         # Fetch HTML using the selected mode
-        if mode == "dynamic":
-            html = fetch_dynamic(current_url, wait_time)
-        else:
-            html = fetch_static(current_url)
+        try:
+            if mode == "dynamic":
+                html = fetch_dynamic(current_url, wait_time)
+            else:
+                html = fetch_static(current_url)
+        except Exception as fe:
+            st.error(f"Failed to fetch {current_url}: {fe}")
+            continue
 
         # Extract data from the current page
         page_data = extract_data(current_url, html)
