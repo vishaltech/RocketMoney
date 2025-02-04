@@ -2,341 +2,202 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from io import BytesIO
-import hashlib
-import datetime
+from pandas_profiling import ProfileReport
 import os
 import json
+from datetime import datetime
 import tempfile
-import zipfile
-from graphviz import Digraph
-from sqlalchemy import create_engine
-import pyarrow as pa
-import pyarrow.parquet as pq
-from ydata_profiling import ProfileReport
-import joblib
-from deepdiff import DeepDiff
 
-# ML imports
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.svm import SVC, SVR
-from sklearn.metrics import (accuracy_score, r2_score, mean_squared_error, 
-                            classification_report, confusion_matrix)
+# Cloud Provider Imports
+import boto3  # AWS
+from snowflake import connector  # Snowflake
+from azure.storage.blob import BlobServiceClient  # Azure
+from google.cloud import storage  # GCP
 
 # -----------------------
-# Initial Setup
+# Configuration Setup
 # -----------------------
-st.set_page_config(page_title="🚀 DataForge Pro", layout="wide", page_icon="🔮")
+st.set_page_config(page_title="Cloud DataForge", layout="wide", page_icon="🌩️")
 
 # -----------------------
-# Authentication System
+# Cloud Connection Managers
 # -----------------------
-def user_manager():
-    USERS_FILE = "users.json"
-    
-    def load_users():
-        try:
-            if os.path.exists(USERS_FILE):
-                with open(USERS_FILE, "r") as f:
-                    return json.load(f)
-            return {}
-        except Exception:
-            return {}
+class CloudConnector:
+    @staticmethod
+    def aws_client():
+        return boto3.client(
+            's3',
+            aws_access_key_id=st.secrets.get("AWS_ACCESS_KEY"),
+            aws_secret_access_key=st.secrets.get("AWS_SECRET_KEY")
+        )
 
-    def save_users(users):
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f)
+    @staticmethod
+    def snowflake_conn():
+        return connector.connect(
+            user=st.secrets.get("SNOWFLAKE_USER"),
+            password=st.secrets.get("SNOWFLAKE_PWD"),
+            account=st.secrets.get("SNOWFLAKE_ACCOUNT"),
+            warehouse=st.secrets.get("SNOWFLAKE_WH"),
+            database=st.secrets.get("SNOWFLAKE_DB")
+        )
 
-    if "auth" not in st.session_state:
-        st.session_state.auth = {"authenticated": False}
+    @staticmethod
+    def azure_client():
+        return BlobServiceClient.from_connection_string(
+            st.secrets.get("AZURE_CONN_STR")
+        )
 
-    if st.session_state.auth["authenticated"]:
-        return True
-
-    st.title("🔒 DataForge Pro Access")
-    users = load_users()
-    auth_mode = "Register" if not users else st.radio("Mode", ("Login", "Register"))
-
-    if auth_mode == "Register":
-        with st.form("Register"):
-            user = st.text_input("Username")
-            pwd = st.text_input("Password", type="password")
-            pwd2 = st.text_input("Confirm Password", type="password")
-            if st.form_submit_button("Register"):
-                if user and pwd and (pwd == pwd2):
-                    users[user] = hashlib.sha256(pwd.encode()).hexdigest()
-                    save_users(users)
-                    st.success("Registered! Please login")
-                return False
-
-    elif auth_mode == "Login":
-        with st.form("Login"):
-            user = st.text_input("Username")
-            pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("Login"):
-                if users.get(user) == hashlib.sha256(pwd.encode()).hexdigest():
-                    st.session_state.auth = {"authenticated": True, "user": user}
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials")
-                return False
-    return False
-
-if not user_manager():
-    st.stop()
+    @staticmethod
+    def gcp_client():
+        return storage.Client.from_service_account_json(
+            json.loads(st.secrets.get("GCP_CREDENTIALS"))
+        )
 
 # -----------------------
 # Core Application
 # -----------------------
-class DataForge:
-    def __init__(self):
-        self.init_session()
-        
-    def init_session(self):
-        defaults = {
-            "datasets": {},
-            "versions": {},
-            "lineage": {},
-            "audit": [],
-            "queries": [],
-            "models": {}
-        }
-        for key, val in defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = val
-
-    def log_audit(self, action):
-        entry = f"{datetime.datetime.now()} | {st.session_state.auth['user']} | {action}"
-        st.session_state.audit.append(entry)
-
-    def handle_upload(self):
-        with st.sidebar:
-            st.header("📤 Data Hub")
-            files = st.file_uploader("Upload datasets", 
-                                   type=["csv", "xlsx", "parquet", "feather"],
-                                   accept_multiple_files=True)
+def main():
+    st.title("🌩️ Multi-Cloud Data Platform")
+    
+    # Initialize session state
+    if 'datasets' not in st.session_state:
+        st.session_state.datasets = {}
+    
+    # -----------------------
+    # Cloud Connection Sidebar
+    # -----------------------
+    with st.sidebar:
+        st.header("🔗 Cloud Connections")
+        with st.expander("AWS Configuration"):
+            aws_bucket = st.text_input("S3 Bucket")
+            aws_prefix = st.text_input("S3 Path Prefix")
             
-            if files:
-                for file in files:
-                    try:
-                        if file.name.endswith(('.xls', '.xlsx')):
-                            sheets = pd.read_excel(file, sheet_name=None)
-                            for sheet, df in sheets.items():
-                                self.store_dataset(file.name, sheet, df)
-                        else:
-                            ext = file.name.split('.')[-1]
-                            df = pd.read_csv(file) if ext == 'csv' else pd.read_parquet(file)
-                            self.store_dataset(file.name, 'data', df)
-                    except Exception as e:
-                        st.error(f"Error loading {file.name}: {str(e)}")
+        with st.expander("Snowflake Configuration"):
+            sf_table = st.text_input("Table Name")
+            sf_query = st.text_area("Custom Query")
+            
+        with st.expander("Azure Configuration"):
+            az_container = st.text_input("Container Name")
+            az_prefix = st.text_input("Blob Prefix")
+            
+        with st.expander("GCP Configuration"):
+            gcp_bucket = st.text_input("GCS Bucket")
+            gcp_prefix = st.text_input("GCS Path Prefix")
 
-    def store_dataset(self, filename, sheet, df):
-        default_name = f"{filename.split('.')[0]}_{sheet}"[:20]
-        name = st.text_input(f"Name for {filename} - {sheet}", value=default_name)
-        if name and name not in st.session_state.datasets:
-            st.session_state.datasets[name] = df
-            st.session_state.versions[name] = [df.copy()]
-            st.session_state.lineage[name] = [f"Imported from {filename}"]
-            self.log_audit(f"Dataset added: {name} ({len(df)} rows)")
+    # -----------------------
+    # Cloud Data Operations
+    # -----------------------
+    def handle_aws_import():
+        s3 = CloudConnector.aws_client()
+        response = s3.list_objects_v2(Bucket=aws_bucket, Prefix=aws_prefix)
+        files = [obj['Key'] for obj in response.get('Contents', [])]
+        
+        selected = st.selectbox("Select S3 Object", files)
+        if st.button("Import from S3"):
+            with tempfile.NamedTemporaryFile() as tmp:
+                s3.download_file(aws_bucket, selected, tmp.name)
+                df = pd.read_parquet(tmp) if selected.endswith('.parquet') else pd.read_csv(tmp)
+                st.session_state.datasets[selected.split('/')[-1]] = df
 
-    def data_explorer(self):
-        st.header("🔍 Data Explorer")
-        ds = st.selectbox("Choose dataset", list(st.session_state.datasets.keys()))
-        df = st.session_state.datasets[ds]
+    def handle_snowflake_import():
+        conn = CloudConnector.snowflake_conn()
+        cursor = conn.cursor()
         
-        cols = st.columns(4)
-        cols[0].metric("Rows", df.shape[0])
-        cols[1].metric("Columns", df.shape[1])
-        cols[2].metric("Memory", f"{df.memory_usage().sum()/1e6:.2f} MB")
-        cols[3].metric("Versions", len(st.session_state.versions[ds]))
+        if sf_query:
+            cursor.execute(sf_query)
+        else:
+            cursor.execute(f"SELECT * FROM {sf_table}")
+            
+        df = cursor.fetch_pandas_all()
+        st.session_state.datasets[sf_table] = df
+
+    def handle_azure_import():
+        client = CloudConnector.azure_client()
+        container = client.get_container_client(az_container)
+        blobs = [blob.name for blob in container.list_blobs(name_starts_with=az_prefix)]
         
-        with st.expander("🔬 Data Profile"):
+        selected = st.selectbox("Select Azure Blob", blobs)
+        if st.button("Import from Azure"):
+            blob = container.get_blob_client(selected)
+            data = blob.download_blob().readall()
+            df = pd.read_parquet(BytesIO(data)) if selected.endswith('.parquet') else pd.read_csv(BytesIO(data))
+            st.session_state.datasets[selected.split('/')[-1]] = df
+
+    def handle_gcp_import():
+        client = CloudConnector.gcp_client()
+        bucket = client.get_bucket(gcp_bucket)
+        blobs = list(bucket.list_blobs(prefix=gcp_prefix))
+        
+        selected = st.selectbox("Select GCS Object", [blob.name for blob in blobs])
+        if st.button("Import from GCS"):
+            blob = bucket.blob(selected)
+            with tempfile.NamedTemporaryFile() as tmp:
+                blob.download_to_filename(tmp.name)
+                df = pd.read_parquet(tmp) if selected.endswith('.parquet') else pd.read_csv(tmp)
+                st.session_state.datasets[selected.split('/')[-1]] = df
+
+    # -----------------------
+    # Main Interface
+    # -----------------------
+    tabs = st.tabs(["Cloud Import", "Data Explorer", "Profiling", "Export"])
+    
+    with tabs[0]:
+        cloud_provider = st.radio("Select Cloud Provider", 
+                                ["AWS", "Snowflake", "Azure", "GCP"])
+        
+        if cloud_provider == "AWS":
+            handle_aws_import()
+        elif cloud_provider == "Snowflake":
+            handle_snowflake_import()
+        elif cloud_provider == "Azure":
+            handle_azure_import()
+        elif cloud_provider == "GCP":
+            handle_gcp_import()
+    
+    with tabs[1]:
+        if st.session_state.datasets:
+            ds = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()))
+            st.dataframe(st.session_state.datasets[ds].head())
+        else:
+            st.info("Import data from cloud providers")
+    
+    with tabs[2]:
+        if st.session_state.datasets:
+            ds = st.selectbox("Choose Dataset", list(st.session_state.datasets.keys()))
             if st.button("Generate Profile"):
-                pr = ProfileReport(df, title=f"Profile for {ds}")
+                pr = ProfileReport(st.session_state.datasets[ds])
                 st.components.v1.html(pr.to_html(), height=800, scrolling=True)
-        
-        with st.expander("📊 Visual Analysis"):
-            self.visual_analysis(df)
     
-    def visual_analysis(self, df):
-        col1, col2 = st.columns(2)
-        with col1:
-            x = st.selectbox("X Axis", df.columns)
-        with col2:
-            y = st.selectbox("Y Axis", df.columns if len(df.columns) > 1 else [None])
-        
-        chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Histogram", "Box"])
-        if chart_type == "Scatter":
-            fig = px.scatter(df, x=x, y=y, hover_name=df.index)
-        elif chart_type == "Line":
-            fig = px.line(df, x=x, y=y)
-        elif chart_type == "Histogram":
-            fig = px.histogram(df, x=x)
-        elif chart_type == "Box":
-            fig = px.box(df, x=x, y=y if y else None)
-        st.plotly_chart(fig, use_container_width=True)
+    with tabs[3]:
+        if st.session_state.datasets:
+            ds = st.selectbox("Select Dataset to Export", list(st.session_state.datasets.keys()))
+            export_format = st.selectbox("Format", ["CSV", "Parquet"])
+            export_provider = st.selectbox("Destination", ["AWS", "Azure", "GCP"])
+            
+            if st.button(f"Export to {export_provider}"):
+                df = st.session_state.datasets[ds]
+                with tempfile.NamedTemporaryFile() as tmp:
+                    if export_format == "CSV":
+                        df.to_csv(tmp.name, index=False)
+                    else:
+                        df.to_parquet(tmp.name)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d%H%M")
+                    filename = f"{ds}_{timestamp}.{export_format.lower()}"
+                    
+                    if export_provider == "AWS":
+                        CloudConnector.aws_client().upload_file(tmp.name, aws_bucket, f"{aws_prefix}/{filename}")
+                    elif export_provider == "Azure":
+                        client = CloudConnector.azure_client()
+                        blob = client.get_blob_client(az_container, f"{az_prefix}/{filename}")
+                        with open(tmp.name, "rb") as data:
+                            blob.upload_blob(data)
+                    elif export_provider == "GCP":
+                        bucket = CloudConnector.gcp_client().get_bucket(gcp_bucket)
+                        blob = bucket.blob(f"{gcp_prefix}/{filename}")
+                        blob.upload_from_filename(tmp.name)
+                    
+                    st.success(f"Exported {filename} to {export_provider}")
 
-    def ml_studio(self):
-        st.header("🤖 ML Studio")
-        ds = st.selectbox("Select Dataset", list(st.session_state.datasets.keys()))
-        df = st.session_state.datasets[ds]
-        
-        st.write("### Data Preview")
-        st.dataframe(df.head())
-        
-        task = st.radio("Task Type", ["Classification", "Regression"])
-        target = st.selectbox("Target Variable", df.columns)
-        features = st.multiselect("Features", [c for c in df.columns if c != target])
-        
-        model_type = st.selectbox("Algorithm", ["Random Forest", "Gradient Boosting", "SVM", "Linear Model"])
-        self.model_training(task, model_type, df, features, target)
-    
-    def model_training(self, task, model_type, df, features, target):
-        with st.expander("⚙️ Hyperparameters"):
-            params = self.get_model_params(task, model_type)
-        
-        if st.button("Train Model"):
-            try:
-                X = df[features].apply(pd.to_numeric, errors='coerce')
-                y = df[target]
-                
-                if task == "Classification":
-                    y = y.astype('category').cat.codes
-                else:
-                    y = pd.to_numeric(y, errors='coerce')
-                
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-                model = self.init_model(task, model_type, params)
-                model.fit(X_train, y_train)
-                preds = model.predict(X_test)
-                
-                self.show_metrics(task, y_test, preds)
-                self.feature_analysis(model, features)
-                self.save_model(model, model_type)
-                
-            except Exception as e:
-                st.error(f"Training failed: {str(e)}")
-    
-    def get_model_params(self, task, model_type):
-        params = {}
-        if model_type == "Random Forest":
-            params["n_estimators"] = st.slider("Trees", 10, 500, 100)
-            params["max_depth"] = st.slider("Max Depth", 2, 50, 10)
-        elif model_type == "Gradient Boosting":
-            params["n_estimators"] = st.slider("Estimators", 10, 500, 100)
-            params["learning_rate"] = st.slider("Learning Rate", 0.001, 1.0, 0.1)
-        elif model_type == "SVM":
-            params["C"] = st.slider("Regularization", 0.1, 10.0, 1.0)
-            params["kernel"] = st.selectbox("Kernel", ["rbf", "linear", "poly"])
-        return params
-    
-    def init_model(self, task, model_type, params):
-        if task == "Classification":
-            models = {
-                "Random Forest": RandomForestClassifier,
-                "Gradient Boosting": GradientBoostingClassifier,
-                "SVM": SVC,
-                "Linear Model": LogisticRegression
-            }
-        else:
-            models = {
-                "Random Forest": RandomForestRegressor,
-                "Gradient Boosting": GradientBoostingRegressor,
-                "SVM": SVR,
-                "Linear Model": LinearRegression
-            }
-        return models[model_type](**params)
-    
-    def show_metrics(self, task, y_true, y_pred):
-        st.subheader("📊 Performance Metrics")
-        if task == "Classification":
-            st.metric("Accuracy", f"{accuracy_score(y_true, y_pred):.2%}")
-            st.write(classification_report(y_true, y_pred))
-            fig = px.imshow(confusion_matrix(y_true, y_pred), 
-                          text_auto=True, labels=dict(x="Predicted", y="Actual"))
-            st.plotly_chart(fig)
-        else:
-            st.metric("R² Score", f"{r2_score(y_true, y_pred):.2f}")
-            st.metric("RMSE", f"{mean_squared_error(y_true, y_pred, squared=False):.2f}")
-            fig = px.scatter(x=y_true, y=y_pred, labels={"x": "Actual", "y": "Predicted"})
-            fig.add_shape(type="line", x0=y_true.min(), y0=y_true.min(),
-                        x1=y_true.max(), y1=y_true.max())
-            st.plotly_chart(fig)
-    
-    def feature_analysis(self, model, features):
-        st.subheader("📈 Feature Analysis")
-        if hasattr(model, "feature_importances_"):
-            importance = pd.DataFrame({
-                "Feature": features,
-                "Importance": model.feature_importances_
-            }).sort_values("Importance", ascending=False)
-            fig = px.bar(importance, x="Importance", y="Feature", orientation='h')
-            st.plotly_chart(fig)
-        elif hasattr(model, "coef_"):
-            coefs = pd.DataFrame({
-                "Feature": features,
-                "Coefficient": model.coef_
-            }).sort_values("Coefficient", ascending=False)
-            fig = px.bar(coefs, x="Coefficient", y="Feature", orientation='h')
-            st.plotly_chart(fig)
-    
-    def save_model(self, model, model_type):
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            joblib.dump(model, tmp.name)
-            st.download_button(
-                "💾 Download Model",
-                data=open(tmp.name, "rb"),
-                file_name=f"{model_type}_{datetime.datetime.now().strftime('%Y%m%d%H%M')}.joblib"
-            )
-
-    def data_lineage(self):
-        st.header("🔗 Data Lineage")
-        ds = st.selectbox("Dataset", list(st.session_state.datasets.keys()))
-        lineage = st.session_state.lineage[ds]
-        
-        dot = Digraph()
-        for i, step in enumerate(lineage):
-            dot.node(str(i), f"v{i}: {step}")
-            if i > 0:
-                dot.edge(str(i-1), str(i))
-        st.graphviz_chart(dot)
-        
-        if st.button("View Version Diffs"):
-            self.show_version_diffs(ds)
-    
-    def show_version_diffs(self, ds):
-        versions = st.session_state.versions[ds]
-        current = st.session_state.datasets[ds]
-        
-        for i, ver in enumerate(versions[:-1]):
-            diff = DeepDiff(ver, versions[i+1], ignore_order=True)
-            with st.expander(f"Diff v{i} → v{i+1}"):
-                st.json(diff.to_json())
-
-    def run(self):
-        self.handle_upload()
-        tabs = st.tabs(["Explorer", "ML Studio", "Lineage", "Audit"])
-        
-        with tabs[0]:
-            self.data_explorer()
-        
-        with tabs[1]:
-            self.ml_studio()
-        
-        with tabs[2]:
-            self.data_lineage()
-        
-        with tabs[3]:
-            st.header("📜 Audit Trail")
-            st.write(f"Total entries: {len(st.session_state.audit)}")
-            for entry in reversed(st.session_state.audit[-20:]):
-                st.code(entry)
-
-# -----------------------
-# Run Application
-# -----------------------
 if __name__ == "__main__":
-    app = DataForge()
-    app.run()
+    main()
