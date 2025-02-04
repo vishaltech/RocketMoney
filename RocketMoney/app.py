@@ -1,572 +1,218 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-import hashlib
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 import json
-import os
-import tempfile
-import joblib
-from datetime import datetime
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    r2_score,
-    mean_squared_error
-)
+import re
+from collections import deque
+import time
 
-# --------------------------
-# Configuration
-# --------------------------
-st.set_page_config(
-    page_title="DataForge Basic",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Selenium imports (only used if dynamic scraping is selected)
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 
-# --------------------------
-# Authentication System
-# --------------------------
-class AuthSystem:
-    def __init__(self):
-        self.users_file = "users.json"
-        self.session_timeout = 3600  # 1 hour
+# ---------------------------------------------------------------------
+# 1. Initialize Selenium WebDriver (cached so it's created once)
+# ---------------------------------------------------------------------
+@st.cache_resource
+def init_selenium_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(options=chrome_options)
 
-    def _hash_password(self, password):
-        return hashlib.sha256(password.encode()).hexdigest()
-
-    def _load_users(self):
-        try:
-            if os.path.exists(self.users_file):
-                with open(self.users_file) as f:
-                    return json.load(f)
-            return {}
-        except Exception:
-            return {}
-
-    def _save_users(self, users):
-        with open(self.users_file, "w") as f:
-            json.dump(users, f)
-
-    def authenticate(self):
-        if 'auth' not in st.session_state:
-            st.session_state.auth = {
-                'authenticated': False,
-                'username': None,
-                'login_time': None
-            }
-
-        if not st.session_state.auth['authenticated']:
-            st.title("🔒 DataForge Basic Login")
-            users = self._load_users()
-
-            with st.container():
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    # Placeholder image
-                    st.image("https://via.placeholder.com/100", width=100)
-                with col2:
-                    # If you see an error with `horizontal=True`, remove it or upgrade Streamlit
-                    auth_mode = st.radio("Mode", ["Login", "Register"], horizontal=True)
-
-                username = st.text_input("Username")
-                password = st.text_input("Password", type="password")
-
-                if st.button(f"{auth_mode}"):
-                    if auth_mode == "Register":
-                        if username and password:
-                            if username not in users:
-                                users[username] = self._hash_password(password)
-                                self._save_users(users)
-                                st.success("Account created! Please login")
-                            else:
-                                st.error("Username already exists")
-                    else:
-                        if username in users and users.get(username) == self._hash_password(password):
-                            st.session_state.auth = {
-                                'authenticated': True,
-                                'username': username,
-                                'login_time': datetime.now()
-                            }
-                            st.experimental_rerun()
-                        else:
-                            st.error("Invalid credentials")
-            st.stop()
-        else:
-            # Session timeout check
-            elapsed = (datetime.now() - st.session_state.auth['login_time']).total_seconds()
-            if elapsed > self.session_timeout:
-                st.session_state.auth['authenticated'] = False
-                st.warning("Session expired, please login again")
-                st.experimental_rerun()
-            return True
-
-# --------------------------
-# Data Manager
-# --------------------------
-class DataManager:
-    def __init__(self):
-        if 'datasets' not in st.session_state:
-            st.session_state.datasets = {}
-        if 'versions' not in st.session_state:
-            st.session_state.versions = {}
-        if 'lineage' not in st.session_state:
-            st.session_state.lineage = {}
-
-    def handle_upload(self):
-        with st.sidebar.expander("📤 Data Upload", expanded=True):
-            uploaded_files = st.file_uploader(
-                "Upload datasets",
-                type=["csv", "xlsx", "parquet"],
-                accept_multiple_files=True
+# ---------------------------------------------------------------------
+# 2. Scraping Functions
+# ---------------------------------------------------------------------
+def fetch_static(url, headers=None):
+    """Fetch a page using requests (static). Returns the raw HTML."""
+    if not headers:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                " AppleWebKit/537.36 (KHTML, like Gecko)"
+                " Chrome/58.0.3029.110 Safari/537.3"
             )
-
-            for file in uploaded_files:
-                try:
-                    if file.name not in st.session_state.datasets:
-                        df = self._read_file(file)
-                        default_name = os.path.splitext(file.name)[0][:20]
-                        new_name = st.text_input(
-                            f"Name for {file.name}",
-                            value=default_name,
-                            key=f"name_{file.name}"
-                        )
-                        if new_name:
-                            self._store_dataset(new_name, df, f"Uploaded {file.name}")
-                except Exception as e:
-                    st.error(f"Error processing {file.name}: {str(e)}")
-
-    def _read_file(self, file):
-        if file.name.endswith('.parquet'):
-            return pd.read_parquet(file)
-        elif file.name.endswith('.xlsx'):
-            return pd.read_excel(file)
-        else:
-            return pd.read_csv(file)
-
-    def _store_dataset(self, name, df, operation):
-        st.session_state.datasets[name] = df
-        st.session_state.versions[name] = [df.copy()]
-        st.session_state.lineage[name] = [operation]
-
-    def dataset_selector(self, key):
-        if len(st.session_state.datasets) == 0:
-            st.info("No datasets available. Please upload one first.")
-            return None
-        return st.selectbox(
-            "Select Dataset",
-            list(st.session_state.datasets.keys()),
-            key=f"selector_{key}"
-        )
-
-# --------------------------
-# Data Transformation Engine
-# --------------------------
-class DataTransformer:
-    def __init__(self):
-        self.operations = {
-            "Filter": self._filter_data,
-            "Merge": self._merge_datasets,
-            "Clean": self._clean_data,
-            "Custom": self._custom_transformation
         }
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.text
 
-    def show_interface(self):
-        with st.expander("🔧 Data Transformations", expanded=True):
-            if len(st.session_state.datasets) == 0:
-                st.info("No datasets available for transformation. Please upload a dataset.")
-                return
+def fetch_dynamic(url, wait_time=3):
+    """
+    Fetch a page via Selenium (dynamic).
+    wait_time: seconds to wait for page to load.
+    Returns the raw HTML.
+    """
+    driver = init_selenium_driver()
+    driver.get(url)
+    time.sleep(wait_time)
+    html = driver.page_source
+    return html
 
-            selected_op = st.selectbox("Select Operation", list(self.operations.keys()))
-            self.operations[selected_op]()
+def parse_html(html):
+    """Convert HTML string to a BeautifulSoup object."""
+    return BeautifulSoup(html, "html.parser")
 
-    def _filter_data(self):
-        dataset = DataManager().dataset_selector("filter")
-        if not dataset:
-            return
-        df = st.session_state.datasets[dataset]
+def extract_data(url, html):
+    """
+    Extract advanced data from a single page:
+    - title
+    - headings (h1, h2, h3)
+    - meta tags
+    - images
+    - internal and external links
+    Returns a dict with extracted info.
+    """
+    soup = parse_html(html)
+    data = {}
+    
+    # Title
+    title_tag = soup.find("title")
+    data["title"] = title_tag.get_text(strip=True) if title_tag else None
 
-        col1, col2 = st.columns(2)
-        with col1:
-            column = st.selectbox("Column", df.columns, key="filter_col")
-        with col2:
-            operation = st.selectbox(
-                "Condition",
-                ["==", "!=", ">", "<", ">=", "<=", "contains", "is null", "not null"],
-                key="filter_op"
-            )
+    # Headings
+    headings = []
+    for tag_name in ["h1", "h2", "h3"]:
+        for tag in soup.find_all(tag_name):
+            headings.append({
+                "tag": tag_name,
+                "text": tag.get_text(strip=True)
+            })
+    data["headings"] = headings
 
-        value = None
-        if operation not in ["is null", "not null"]:
-            value = st.text_input("Value", key="filter_val")
+    # Meta tags
+    metas = []
+    for meta in soup.find_all("meta"):
+        attrs = {k: v for k, v in meta.attrs.items()}
+        metas.append(attrs)
+    data["meta_tags"] = metas
 
-        if st.button("Apply Filter"):
-            try:
-                filtered = self._apply_filter(df, column, operation, value)
-                self._create_version(dataset, filtered, f"Filtered {column} {operation} {value}")
-                st.success(f"Filter applied. New shape: {filtered.shape}")
-            except Exception as e:
-                st.error(f"Filter error: {str(e)}")
+    # Images
+    images = []
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        alt = img.get("alt")
+        images.append({"src": src, "alt": alt})
+    data["images"] = images
 
-    def _apply_filter(self, df, column, operation, value):
-        if operation == "==":
-            return df[df[column] == value]
-        elif operation == "!=":
-            return df[df[column] != value]
-        elif operation == ">":
-            return df[df[column] > float(value)]
-        elif operation == "<":
-            return df[df[column] < float(value)]
-        elif operation == ">=":
-            return df[df[column] >= float(value)]
-        elif operation == "<=":
-            return df[df[column] <= float(value)]
-        elif operation == "contains":
-            return df[df[column].astype(str).str.contains(str(value), na=False)]
-        elif operation == "is null":
-            return df[df[column].isna()]
-        elif operation == "not null":
-            return df[df[column].notna()]
+    # Links
+    links = []
+    for a in soup.find_all("a", href=True):
+        link_href = a["href"].strip()
+        link_text = a.get_text(strip=True)
+        links.append({"href": link_href, "text": link_text})
+    data["links"] = links
 
-    def _merge_datasets(self):
-        dm = DataManager()
+    data["url"] = url
+    return data
 
-        col1, col2 = st.columns(2)
-        with col1:
-            left_ds = dm.dataset_selector("merge_left")
-            if not left_ds:
-                return
-            left_df = st.session_state.datasets[left_ds]
-            left_key = st.selectbox("Left Key", left_df.columns)
-        with col2:
-            right_ds = dm.dataset_selector("merge_right")
-            if not right_ds:
-                return
-            right_df = st.session_state.datasets[right_ds]
-            right_key = st.selectbox("Right Key", right_df.columns)
+# ---------------------------------------------------------------------
+# 3. BFS Crawler
+# ---------------------------------------------------------------------
+def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
+    """
+    BFS-based crawler:
+      - Only follows links within the same domain as start_url.
+      - Up to max_depth levels deep.
+      - Up to max_pages total pages crawled.
+      - mode: "static" or "dynamic"
+    Returns a list of dicts, each containing extracted data for one page.
+    """
+    domain = urlparse(start_url).netloc
+    visited = set()
+    queue = deque()
+    queue.append((start_url, 0))
+    visited.add(start_url)
+    
+    results = []
+    pages_crawled = 0
+    
+    while queue:
+        current_url, depth = queue.popleft()
+        if depth > max_depth:
+            break
 
-        how = st.selectbox("Merge Type", ["inner", "left", "right", "outer"])
-        new_name = st.text_input("New Dataset Name")
-
-        if st.button("Merge Datasets"):
-            if not new_name:
-                st.error("Please enter a new dataset name.")
-                return
-            try:
-                merged = pd.merge(
-                    left_df, right_df,
-                    left_on=left_key,
-                    right_on=right_key,
-                    how=how
-                )
-                self._create_version(new_name, merged, f"Merged {left_ds} and {right_ds}")
-                st.success(f"Merged successfully. New shape: {merged.shape}")
-            except Exception as e:
-                st.error(f"Merge failed: {str(e)}")
-
-    def _clean_data(self):
-        dataset = DataManager().dataset_selector("clean")
-        if not dataset:
-            return
-        df = st.session_state.datasets[dataset]
-
-        st.write("### Missing Values Handling")
-        missing_cols = df.columns[df.isnull().any()].tolist()
-        if missing_cols:
-            col1, col2 = st.columns(2)
-            with col1:
-                strategy = st.selectbox("Treatment Strategy", [
-                    "Drop rows",
-                    "Fill with mean",
-                    "Fill with median",
-                    "Fill with mode",
-                    "Custom value"
-                ])
-            with col2:
-                fill_value = None
-                if strategy == "Custom value":
-                    fill_value = st.text_input("Custom Value")
-
-            if st.button("Clean Data"):
-                cleaned = self._handle_missing(df, strategy, fill_value)
-                self._create_version(dataset, cleaned, f"Cleaned using {strategy}")
-                st.success(f"Cleaning complete. New shape: {cleaned.shape}")
+        # Fetch HTML
+        if mode == "dynamic":
+            html = fetch_dynamic(current_url, wait_time)
         else:
-            st.info("No missing values found")
+            html = fetch_static(current_url)
+        
+        # Extract
+        page_data = extract_data(current_url, html)
+        results.append(page_data)
+        pages_crawled += 1
 
-    def _handle_missing(self, df, strategy, custom_value=None):
-        if strategy == "Drop rows":
-            return df.dropna()
-        elif strategy == "Fill with mean":
-            return df.fillna(df.mean(numeric_only=True))
-        elif strategy == "Fill with median":
-            return df.fillna(df.median(numeric_only=True))
-        elif strategy == "Fill with mode":
-            return df.fillna(df.mode().iloc[0])
-        else:
-            return df.fillna(custom_value)
+        # Show progress in Streamlit
+        st.progress(pages_crawled / max_pages)
+        
+        # If limit reached, stop
+        if pages_crawled >= max_pages:
+            break
 
-    def _custom_transformation(self):
-        dataset = DataManager().dataset_selector("custom")
-        if not dataset:
-            return
-        df = st.session_state.datasets[dataset]
+        # Parse links for BFS expansion
+        soup = parse_html(html)
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"].strip()
+            # Make fully qualified
+            next_link = urljoin(current_url, href)
+            # Check same domain
+            if urlparse(next_link).netloc == domain:
+                # If not visited, queue it
+                if next_link not in visited:
+                    visited.add(next_link)
+                    queue.append((next_link, depth + 1))
 
-        code = st.text_area(
-            "Enter Python Code (use 'df' as DataFrame variable)",
-            height=200
-        )
-        if st.button("Execute Code"):
-            try:
-                loc = {"df": df.copy(), "pd": pd, "np": np}
-                exec(code, globals(), loc)
-                new_df = loc.get('df', df)
-                self._create_version(dataset, new_df, "Custom transformation")
-                st.success("Code executed successfully")
-            except Exception as e:
-                st.error(f"Execution error: {str(e)}")
+    return results
 
-    def _create_version(self, name, df, operation):
-        if name not in st.session_state.datasets:
-            st.session_state.datasets[name] = df
-            st.session_state.versions[name] = [df.copy()]
-            st.session_state.lineage[name] = [operation]
-        else:
-            st.session_state.datasets[name] = df
-            st.session_state.versions[name].append(df.copy())
-            st.session_state.lineage[name].append(operation)
-
-# --------------------------
-# Visualization Engine
-# --------------------------
-class Visualizer:
-    def show_interface(self):
-        with st.expander("📊 Visualization", expanded=True):
-            dataset = DataManager().dataset_selector("visualization")
-            if not dataset:
-                return
-            df = st.session_state.datasets[dataset]
-
-            chart_type = st.selectbox("Chart Type", [
-                "Scatter Plot",
-                "Line Chart",
-                "Histogram",
-                "Box Plot",
-                "3D Scatter",
-                "Heatmap"
-            ])
-
-            if chart_type == "Scatter Plot":
-                self._scatter_plot(df)
-            elif chart_type == "Line Chart":
-                self._line_chart(df)
-            elif chart_type == "Histogram":
-                self._histogram(df)
-            elif chart_type == "Box Plot":
-                self._box_plot(df)
-            elif chart_type == "3D Scatter":
-                self._3d_scatter(df)
-            elif chart_type == "Heatmap":
-                self._heatmap(df)
-
-    def _scatter_plot(self, df):
-        col1, col2 = st.columns(2)
-        with col1:
-            x = st.selectbox("X Axis", df.columns)
-        with col2:
-            y = st.selectbox("Y Axis", df.columns)
-
-        color = st.selectbox("Color", [None] + df.columns.tolist())
-        size = st.selectbox("Size", [None] + df.select_dtypes(include=np.number).columns.tolist())
-
-        fig = px.scatter(df, x=x, y=y, color=color, size=size)
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _line_chart(self, df):
-        x = st.selectbox("X Axis", df.columns)
-        y = st.selectbox("Y Axis", df.select_dtypes(include=np.number).columns)
-        color = st.selectbox("Group By", [None] + df.columns.tolist())
-
-        fig = px.line(df, x=x, y=y, color=color)
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _histogram(self, df):
-        col = st.selectbox("Column", df.columns)
-        nbins = st.slider("Number of Bins", 5, 100, 20)
-        color = st.selectbox("Color", [None] + df.columns.tolist())
-
-        fig = px.histogram(df, x=col, nbins=nbins, color=color)
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _box_plot(self, df):
-        y = st.selectbox("Value Column", df.select_dtypes(include=np.number).columns)
-        x = st.selectbox("Category Column", [None] + df.columns.tolist())
-        color = st.selectbox("Color", [None] + df.columns.tolist())
-
-        fig = px.box(df, x=x, y=y, color=color)
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _3d_scatter(self, df):
-        cols = st.columns(3)
-        with cols[0]:
-            x = st.selectbox("X", df.columns)
-        with cols[1]:
-            y = st.selectbox("Y", df.columns)
-        with cols[2]:
-            z = st.selectbox("Z", df.columns)
-
-        color = st.selectbox("Color", [None] + df.columns.tolist())
-        size = st.selectbox("Size", [None] + df.select_dtypes(include=np.number).columns.tolist())
-
-        fig = px.scatter_3d(df, x=x, y=y, z=z, color=color, size=size)
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _heatmap(self, df):
-        cols = st.multiselect("Select Columns", df.select_dtypes(include=np.number).columns)
-        if cols:
-            corr = df[cols].corr()
-            fig = px.imshow(corr, text_auto=True)
-            st.plotly_chart(fig, use_container_width=True)
-
-# --------------------------
-# Machine Learning Module
-# --------------------------
-class MLProcessor:
-    def show_interface(self):
-        with st.expander("🤖 Machine Learning Studio", expanded=True):
-            dataset = DataManager().dataset_selector("ml")
-            if not dataset:
-                return
-            df = st.session_state.datasets[dataset]
-
-            st.write("### Dataset Preview")
-            st.dataframe(df.head(3))
-
-            target = st.selectbox("Target Variable", df.columns)
-            task = st.selectbox("Task Type", ["Classification", "Regression"])
-            test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
-
-            if task == "Classification":
-                model = RandomForestClassifier()
-                metrics = {
-                    'accuracy': accuracy_score,
-                    'precision': precision_score,
-                    'recall': recall_score
-                }
-            else:
-                model = RandomForestRegressor()
-                metrics = {
-                    'r2': r2_score,
-                    'mse': mean_squared_error
-                }
-
-            if st.button("Train Model"):
-                try:
-                    X = df.drop(columns=[target])
-                    y = df[target]
-
-                    # Convert non-numerical columns if necessary
-                    for col in X.select_dtypes(include=['object', 'category']).columns:
-                        X[col], _ = X[col].factorize()
-
-                    X_train, X_test, y_train, y_test = train_test_split(
-                        X, y, test_size=test_size, random_state=42
-                    )
-
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_test)
-
-                    st.write("### Model Performance")
-                    cols = st.columns(len(metrics))
-                    for i, (name, fn) in enumerate(metrics.items()):
-                        if name in ["precision", "recall"]:
-                            val = fn(y_test, y_pred, average='macro', zero_division=0)
-                        else:
-                            val = fn(y_test, y_pred)
-                        cols[i].metric(name.title(), f"{val:.2f}")
-
-                    st.write("### Feature Importance")
-                    self._show_feature_importance(model, X.columns)
-
-                    self._save_model(model, f"{task}_{target}")
-                except Exception as e:
-                    st.error(f"Training failed: {str(e)}")
-
-    def _show_feature_importance(self, model, features):
-        if not hasattr(model, "feature_importances_"):
-            st.info("This model does not provide feature importances.")
-            return
-
-        importance = pd.DataFrame({
-            'Feature': features,
-            'Importance': model.feature_importances_
-        }).sort_values('Importance', ascending=False)
-
-        fig = px.bar(importance, x='Importance', y='Feature', orientation='h')
-        st.plotly_chart(fig, use_container_width=True)
-
-    def _save_model(self, model, name):
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            joblib.dump(model, tmp.name)
-            st.download_button(
-                "💾 Download Model",
-                data=open(tmp.name, "rb").read(),
-                file_name=f"{name}_{datetime.now().strftime('%Y%m%d')}.joblib"
-            )
-
-# --------------------------
-# Main Application
-# --------------------------
+# ---------------------------------------------------------------------
+# 4. Streamlit App
+# ---------------------------------------------------------------------
 def main():
-    auth = AuthSystem()
-    if auth.authenticate():
-        st.title(f"🧠 DataForge Basic - Welcome {st.session_state.auth['username']}")
+    st.set_page_config(page_title="Ultra Advanced Web Scraper", layout="wide")
+    st.title("Ultra Advanced Web Scraper")
 
-        data_manager = DataManager()
-        data_manager.handle_upload()
+    st.sidebar.header("Scraping Parameters")
+    start_url = st.sidebar.text_input("Start URL (e.g. https://example.com)")
+    max_depth = st.sidebar.number_input("Max Depth", min_value=0, max_value=10, value=1)
+    max_pages = st.sidebar.number_input("Max Pages", min_value=1, max_value=1000, value=5)
+    
+    mode_choice = st.sidebar.selectbox("Scraping Mode", ["static", "dynamic"])
+    wait_time = st.sidebar.slider("Dynamic Wait (seconds)", 1, 10, 3)
+    
+    if st.sidebar.button("Start Scraping"):
+        if not start_url:
+            st.error("Please provide a start URL.")
+        else:
+            with st.spinner("Crawling in progress..."):
+                results = bfs_crawl(
+                    start_url, 
+                    max_depth=max_depth, 
+                    max_pages=max_pages, 
+                    mode=mode_choice, 
+                    wait_time=wait_time
+                )
+            st.success("Crawling Complete!")
 
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "Data Transformation",
-            "Visualization",
-            "Machine Learning",
-            "Data Profiling"
-        ])
+            # Display results
+            st.subheader("Results (JSON)")
 
-        # Tab 1: Data Transformation
-        with tab1:
-            DataTransformer().show_interface()
+            # Show a collapsible view of each page
+            for i, page_dict in enumerate(results, 1):
+                with st.expander(f"Page {i}: {page_dict['url']}"):
+                    st.json(page_dict)
 
-        # Tab 2: Visualization
-        with tab2:
-            Visualizer().show_interface()
-
-        # Tab 3: Machine Learning
-        with tab3:
-            MLProcessor().show_interface()
-
-        # Tab 4: Basic Data Profiling (no external library)
-        with tab4:
-            dataset = data_manager.dataset_selector("profile")
-            if dataset:
-                df = st.session_state.datasets[dataset]
-                st.write("### Quick Data Overview")
-                st.write("**Shape**:", df.shape)
-                st.write("**Info**:")
-                buf = st.text_area("DataFrame Info", df.info(buf=None))  # Will print to console, so show shape as fallback
-
-                st.write("**Head**:")
-                st.dataframe(df.head())
-
-                st.write("**Statistical Summary** (Numeric Columns):")
-                st.dataframe(df.describe())
-
-                st.write("**Missing Values**:")
-                st.dataframe(df.isnull().sum())
+            # Provide a single JSON download
+            json_data = json.dumps(results, indent=2)
+            st.download_button(
+                label="Download All Results as JSON",
+                data=json_data,
+                file_name="scraping_results.json",
+                mime="application/json"
+            )
 
 if __name__ == "__main__":
     main()
