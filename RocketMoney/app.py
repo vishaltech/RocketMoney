@@ -7,9 +7,10 @@ import re
 from collections import deque
 import time
 
-# Selenium + webdriver_manager
+# Selenium & webdriver_manager imports
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ---------------------------------------------------------------------
@@ -18,15 +19,15 @@ from webdriver_manager.chrome import ChromeDriverManager
 @st.cache_resource
 def init_selenium_driver():
     """
-    Creates a headless Selenium Chrome WebDriver with webdriver-manager.
-    Caches the driver so it's only created once in the app lifecycle.
+    Creates a headless Selenium Chrome WebDriver using webdriver-manager.
+    Caches the driver so it's only created once during the app's lifecycle.
     """
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Automatically download and install the matching ChromeDriver
-    driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
 # ---------------------------------------------------------------------
@@ -37,9 +38,9 @@ def fetch_static(url, headers=None):
     if not headers:
         headers = {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                " AppleWebKit/537.36 (KHTML, like Gecko)"
-                " Chrome/58.0.3029.110 Safari/537.3"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/58.0.3029.110 Safari/537.3"
             )
         }
     resp = requests.get(url, headers=headers, timeout=10)
@@ -49,7 +50,7 @@ def fetch_static(url, headers=None):
 def fetch_dynamic(url, wait_time=3):
     """
     Fetch a page via Selenium (dynamic).
-    wait_time: seconds to wait for page to load JavaScript.
+    wait_time: seconds to wait for JavaScript to load.
     Returns the raw HTML.
     """
     driver = init_selenium_driver()
@@ -65,11 +66,11 @@ def parse_html(html):
 def extract_data(url, html):
     """
     Extract advanced data from a single page:
-     - title
-     - headings (h1, h2, h3)
-     - meta tags
-     - images
-     - links
+      - Title
+      - Headings (h1, h2, h3)
+      - Meta tags
+      - Images (src, alt)
+      - Links (href and text)
     Returns a dict with extracted info.
     """
     soup = parse_html(html)
@@ -112,7 +113,7 @@ def extract_data(url, html):
         links.append({"href": link_href, "text": link_text})
     data["links"] = links
 
-    # Original URL
+    # Include original URL
     data["url"] = url
     return data
 
@@ -122,7 +123,7 @@ def extract_data(url, html):
 def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
     """
     BFS-based crawler:
-      - Only follows links within the same domain as start_url.
+      - Follows links within the same domain as start_url.
       - Up to max_depth levels deep.
       - Up to max_pages total pages crawled.
       - mode: "static" or "dynamic"
@@ -137,7 +138,6 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
     results = []
     pages_crawled = 0
     
-    # We will display progress in Streamlit
     progress_bar = st.progress(0)
 
     while queue:
@@ -145,21 +145,20 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
         if depth > max_depth:
             break
 
-        # Fetch HTML
+        # Fetch HTML using the selected mode
         if mode == "dynamic":
             html = fetch_dynamic(current_url, wait_time)
         else:
             html = fetch_static(current_url)
 
-        # Extract data
+        # Extract data from the current page
         page_data = extract_data(current_url, html)
         results.append(page_data)
         pages_crawled += 1
 
-        # Update progress bar
+        # Update progress (clamped to 100%)
         progress_bar.progress(min(int((pages_crawled / max_pages) * 100), 100))
 
-        # Stop if we've reached max_pages
         if pages_crawled >= max_pages:
             break
 
@@ -167,14 +166,11 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
         soup = parse_html(html)
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
-            # Make fully qualified
             next_link = urljoin(current_url, href)
-            # Filter same domain
             next_domain = urlparse(next_link).netloc.lower()
-            if next_domain == domain:
-                if next_link not in visited:
-                    visited.add(next_link)
-                    queue.append((next_link, depth + 1))
+            if next_domain == domain and next_link not in visited:
+                visited.add(next_link)
+                queue.append((next_link, depth + 1))
 
     return results
 
@@ -186,7 +182,7 @@ def main():
     st.title("Ultra Advanced Web Scraper")
 
     st.sidebar.header("Scraping Parameters")
-    start_url = st.sidebar.text_input("Start URL (e.g. https://example.com)")
+    start_url = st.sidebar.text_input("Start URL (e.g., https://example.com)")
     max_depth = st.sidebar.number_input("Max Depth", min_value=0, max_value=10, value=1)
     max_pages = st.sidebar.number_input("Max Pages", min_value=1, max_value=1000, value=5)
     
@@ -208,13 +204,11 @@ def main():
                     )
                     st.success("Crawling Complete!")
                     
-                    # Display results
                     st.subheader("Results (JSON)")
                     for i, page_dict in enumerate(results, 1):
-                        with st.expander(f"Page {i}: {page_dict['url']}"):
+                        with st.expander(f"Page {i}: {page_dict.get('url', 'N/A')}"):
                             st.json(page_dict)
-
-                    # Provide JSON download
+                    
                     json_data = json.dumps(results, indent=2)
                     st.download_button(
                         label="Download All Results as JSON",
