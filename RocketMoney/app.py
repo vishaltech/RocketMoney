@@ -3,47 +3,15 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
-import re
 from collections import deque
 import time
-import os
+import re
 
-# Selenium & webdriver_manager imports
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+# Import Playwright's sync API for dynamic scraping
+from playwright.sync_api import sync_playwright
 
 # ---------------------------------------------------------------------
-# 1. Initialize Selenium WebDriver (cached so it's created once)
-# ---------------------------------------------------------------------
-@st.cache_resource
-def init_selenium_driver():
-    """
-    Creates a headless Selenium Chrome WebDriver using webdriver-manager.
-    It sets the binary location if it detects a known path (e.g. for Chromium on Linux).
-    Caches the driver so it's only created once during the app's lifecycle.
-    """
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    
-    # Attempt to set the binary location based on common Linux paths.
-    if os.path.exists("/usr/bin/chromium-browser"):
-        chrome_options.binary_location = "/usr/bin/chromium-browser"
-    elif os.path.exists("/usr/bin/google-chrome"):
-        chrome_options.binary_location = "/usr/bin/google-chrome"
-    else:
-        st.warning("Chrome/Chromium binary not found in common locations. "
-                   "Ensure Chrome is installed or set the binary location manually.")
-    
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
-
-# ---------------------------------------------------------------------
-# 2. Scraping Functions
+# 1. Scraping Functions
 # ---------------------------------------------------------------------
 def fetch_static(url, headers=None):
     """Fetch a page using requests (static). Returns raw HTML."""
@@ -61,15 +29,19 @@ def fetch_static(url, headers=None):
 
 def fetch_dynamic(url, wait_time=3):
     """
-    Fetch a page via Selenium (dynamic).
+    Fetch a page using Playwright (dynamic).
     wait_time: seconds to wait for JavaScript to load.
     Returns the raw HTML.
     """
-    driver = init_selenium_driver()
-    driver.get(url)
-    time.sleep(wait_time)
-    html = driver.page_source
-    return html
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        # Increase the timeout if needed (milliseconds)
+        page.goto(url, timeout=15000)
+        page.wait_for_timeout(wait_time * 1000)  # wait_time in ms
+        html = page.content()
+        browser.close()
+        return html
 
 def parse_html(html):
     """Convert HTML string to a BeautifulSoup object."""
@@ -83,11 +55,11 @@ def extract_data(url, html):
       - Meta tags
       - Images (src, alt)
       - Links (href and text)
-    Returns a dict with extracted info.
+    Returns a dictionary with the extracted info.
     """
     soup = parse_html(html)
     data = {}
-    
+
     # Title
     title_tag = soup.find("title")
     data["title"] = title_tag.get_text(strip=True) if title_tag else None
@@ -105,51 +77,52 @@ def extract_data(url, html):
     # Meta tags
     metas = []
     for meta in soup.find_all("meta"):
-        attrs = {k: v for k, v in meta.attrs.items()}
-        metas.append(attrs)
+        metas.append(dict(meta.attrs))
     data["meta_tags"] = metas
 
     # Images
     images = []
     for img in soup.find_all("img"):
-        src = img.get("src")
-        alt = img.get("alt")
-        images.append({"src": src, "alt": alt})
+        images.append({
+            "src": img.get("src"),
+            "alt": img.get("alt")
+        })
     data["images"] = images
 
     # Links
     links = []
     for a in soup.find_all("a", href=True):
-        link_href = a["href"].strip()
-        link_text = a.get_text(strip=True)
-        links.append({"href": link_href, "text": link_text})
+        links.append({
+            "href": a["href"].strip(),
+            "text": a.get_text(strip=True)
+        })
     data["links"] = links
 
-    # Include original URL
+    # Include the original URL
     data["url"] = url
+
     return data
 
 # ---------------------------------------------------------------------
-# 3. BFS Crawler
+# 2. BFS Crawler
 # ---------------------------------------------------------------------
 def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
     """
     BFS-based crawler:
       - Follows links within the same domain as start_url.
-      - Up to max_depth levels deep.
-      - Up to max_pages total pages crawled.
-      - mode: "static" or "dynamic"
-    Returns a list of dicts, each containing extracted data for one page.
+      - Crawls up to max_depth levels and max_pages pages.
+      - mode: "static" (requests) or "dynamic" (Playwright).
+    Returns a list of dictionaries (one per page) with extracted data.
     """
     domain = urlparse(start_url).netloc.lower()
     visited = set()
     queue = deque()
     queue.append((start_url, 0))
     visited.add(start_url)
-    
+
     results = []
     pages_crawled = 0
-    
+
     progress_bar = st.progress(0)
 
     while queue:
@@ -157,28 +130,25 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
         if depth > max_depth:
             break
 
-        # Fetch HTML using the selected mode
         try:
             if mode == "dynamic":
                 html = fetch_dynamic(current_url, wait_time)
             else:
                 html = fetch_static(current_url)
-        except Exception as fe:
-            st.error(f"Failed to fetch {current_url}: {fe}")
+        except Exception as e:
+            st.error(f"Failed to fetch {current_url}: {e}")
             continue
 
-        # Extract data from the current page
         page_data = extract_data(current_url, html)
         results.append(page_data)
         pages_crawled += 1
 
-        # Update progress (clamped to 100%)
-        progress_bar.progress(min(int((pages_crawled / max_pages) * 100), 100))
+        progress = min(int((pages_crawled / max_pages) * 100), 100)
+        progress_bar.progress(progress)
 
         if pages_crawled >= max_pages:
             break
 
-        # Parse links for BFS expansion
         soup = parse_html(html)
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
@@ -191,7 +161,7 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
     return results
 
 # ---------------------------------------------------------------------
-# 4. Streamlit App
+# 3. Streamlit App UI
 # ---------------------------------------------------------------------
 def main():
     st.set_page_config(page_title="Ultra Advanced Web Scraper", layout="wide")
@@ -201,40 +171,29 @@ def main():
     start_url = st.sidebar.text_input("Start URL (e.g., https://example.com)")
     max_depth = st.sidebar.number_input("Max Depth", min_value=0, max_value=10, value=1)
     max_pages = st.sidebar.number_input("Max Pages", min_value=1, max_value=1000, value=5)
-    
     mode_choice = st.sidebar.selectbox("Scraping Mode", ["static", "dynamic"])
     wait_time = st.sidebar.slider("Dynamic Wait (seconds)", 1, 10, 3)
-    
+
     if st.sidebar.button("Start Scraping"):
         if not start_url:
             st.error("Please provide a start URL.")
         else:
             with st.spinner("Crawling in progress..."):
-                try:
-                    results = bfs_crawl(
-                        start_url, 
-                        max_depth=max_depth, 
-                        max_pages=max_pages, 
-                        mode=mode_choice, 
-                        wait_time=wait_time
-                    )
-                    st.success("Crawling Complete!")
-                    
-                    st.subheader("Results (JSON)")
-                    for i, page_dict in enumerate(results, 1):
-                        with st.expander(f"Page {i}: {page_dict.get('url', 'N/A')}"):
-                            st.json(page_dict)
-                    
-                    json_data = json.dumps(results, indent=2)
-                    st.download_button(
-                        label="Download All Results as JSON",
-                        data=json_data,
-                        file_name="scraping_results.json",
-                        mime="application/json"
-                    )
-                
-                except Exception as e:
-                    st.error(f"Scraping failed: {e}")
+                results = bfs_crawl(start_url, max_depth, max_pages, mode_choice, wait_time)
+            st.success("Crawling Complete!")
+            st.subheader("Results (JSON)")
+
+            for i, page in enumerate(results, 1):
+                with st.expander(f"Page {i}: {page.get('url', 'N/A')}"):
+                    st.json(page)
+
+            json_data = json.dumps(results, indent=2)
+            st.download_button(
+                label="Download All Results as JSON",
+                data=json_data,
+                file_name="scraping_results.json",
+                mime="application/json"
+            )
 
 if __name__ == "__main__":
     main()
