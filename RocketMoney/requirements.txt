@@ -4,4 +4,3 @@ numpy>=1.19.0
 plotly>=5.0.0
 scikit-learn>=1.0.0
 joblib>=1.1.0
-ydata-profiling>=4.0.0
