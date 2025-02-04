@@ -7,27 +7,33 @@ import re
 from collections import deque
 import time
 
-# Selenium imports (only used if dynamic scraping is selected)
+# Selenium + webdriver_manager
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
 
 # ---------------------------------------------------------------------
 # 1. Initialize Selenium WebDriver (cached so it's created once)
 # ---------------------------------------------------------------------
 @st.cache_resource
 def init_selenium_driver():
+    """
+    Creates a headless Selenium Chrome WebDriver with webdriver-manager.
+    Caches the driver so it's only created once in the app lifecycle.
+    """
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    return webdriver.Chrome(options=chrome_options)
+    # Automatically download and install the matching ChromeDriver
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+    return driver
 
 # ---------------------------------------------------------------------
 # 2. Scraping Functions
 # ---------------------------------------------------------------------
 def fetch_static(url, headers=None):
-    """Fetch a page using requests (static). Returns the raw HTML."""
+    """Fetch a page using requests (static). Returns raw HTML."""
     if not headers:
         headers = {
             "User-Agent": (
@@ -43,7 +49,7 @@ def fetch_static(url, headers=None):
 def fetch_dynamic(url, wait_time=3):
     """
     Fetch a page via Selenium (dynamic).
-    wait_time: seconds to wait for page to load.
+    wait_time: seconds to wait for page to load JavaScript.
     Returns the raw HTML.
     """
     driver = init_selenium_driver()
@@ -59,11 +65,11 @@ def parse_html(html):
 def extract_data(url, html):
     """
     Extract advanced data from a single page:
-    - title
-    - headings (h1, h2, h3)
-    - meta tags
-    - images
-    - internal and external links
+     - title
+     - headings (h1, h2, h3)
+     - meta tags
+     - images
+     - links
     Returns a dict with extracted info.
     """
     soup = parse_html(html)
@@ -106,6 +112,7 @@ def extract_data(url, html):
         links.append({"href": link_href, "text": link_text})
     data["links"] = links
 
+    # Original URL
     data["url"] = url
     return data
 
@@ -121,7 +128,7 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
       - mode: "static" or "dynamic"
     Returns a list of dicts, each containing extracted data for one page.
     """
-    domain = urlparse(start_url).netloc
+    domain = urlparse(start_url).netloc.lower()
     visited = set()
     queue = deque()
     queue.append((start_url, 0))
@@ -130,6 +137,9 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
     results = []
     pages_crawled = 0
     
+    # We will display progress in Streamlit
+    progress_bar = st.progress(0)
+
     while queue:
         current_url, depth = queue.popleft()
         if depth > max_depth:
@@ -140,16 +150,16 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
             html = fetch_dynamic(current_url, wait_time)
         else:
             html = fetch_static(current_url)
-        
-        # Extract
+
+        # Extract data
         page_data = extract_data(current_url, html)
         results.append(page_data)
         pages_crawled += 1
 
-        # Show progress in Streamlit
-        st.progress(pages_crawled / max_pages)
-        
-        # If limit reached, stop
+        # Update progress bar
+        progress_bar.progress(min(int((pages_crawled / max_pages) * 100), 100))
+
+        # Stop if we've reached max_pages
         if pages_crawled >= max_pages:
             break
 
@@ -159,9 +169,9 @@ def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
             href = a_tag["href"].strip()
             # Make fully qualified
             next_link = urljoin(current_url, href)
-            # Check same domain
-            if urlparse(next_link).netloc == domain:
-                # If not visited, queue it
+            # Filter same domain
+            next_domain = urlparse(next_link).netloc.lower()
+            if next_domain == domain:
                 if next_link not in visited:
                     visited.add(next_link)
                     queue.append((next_link, depth + 1))
@@ -188,31 +198,33 @@ def main():
             st.error("Please provide a start URL.")
         else:
             with st.spinner("Crawling in progress..."):
-                results = bfs_crawl(
-                    start_url, 
-                    max_depth=max_depth, 
-                    max_pages=max_pages, 
-                    mode=mode_choice, 
-                    wait_time=wait_time
-                )
-            st.success("Crawling Complete!")
+                try:
+                    results = bfs_crawl(
+                        start_url, 
+                        max_depth=max_depth, 
+                        max_pages=max_pages, 
+                        mode=mode_choice, 
+                        wait_time=wait_time
+                    )
+                    st.success("Crawling Complete!")
+                    
+                    # Display results
+                    st.subheader("Results (JSON)")
+                    for i, page_dict in enumerate(results, 1):
+                        with st.expander(f"Page {i}: {page_dict['url']}"):
+                            st.json(page_dict)
 
-            # Display results
-            st.subheader("Results (JSON)")
-
-            # Show a collapsible view of each page
-            for i, page_dict in enumerate(results, 1):
-                with st.expander(f"Page {i}: {page_dict['url']}"):
-                    st.json(page_dict)
-
-            # Provide a single JSON download
-            json_data = json.dumps(results, indent=2)
-            st.download_button(
-                label="Download All Results as JSON",
-                data=json_data,
-                file_name="scraping_results.json",
-                mime="application/json"
-            )
+                    # Provide JSON download
+                    json_data = json.dumps(results, indent=2)
+                    st.download_button(
+                        label="Download All Results as JSON",
+                        data=json_data,
+                        file_name="scraping_results.json",
+                        mime="application/json"
+                    )
+                
+                except Exception as e:
+                    st.error(f"Scraping failed: {e}")
 
 if __name__ == "__main__":
     main()
