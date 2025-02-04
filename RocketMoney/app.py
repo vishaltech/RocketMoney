@@ -3,9 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-# Replace pandas_profiling with ydata_profiling
-from ydata_profiling import ProfileReport
-
 import hashlib
 import json
 import os
@@ -26,7 +23,7 @@ from sklearn.metrics import (
 # Configuration
 # --------------------------
 st.set_page_config(
-    page_title="DataForge Pro",
+    page_title="DataForge Basic",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -65,15 +62,16 @@ class AuthSystem:
             }
 
         if not st.session_state.auth['authenticated']:
-            st.title("🔒 DataForge Pro Login")
+            st.title("🔒 DataForge Basic Login")
             users = self._load_users()
 
             with st.container():
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    st.image("https://via.placeholder.com/150", width=100)
+                    # Placeholder image
+                    st.image("https://via.placeholder.com/100", width=100)
                 with col2:
-                    # If you see an error with horizontal=True, remove it or upgrade Streamlit.
+                    # If you see an error with `horizontal=True`, remove it or upgrade Streamlit
                     auth_mode = st.radio("Mode", ["Login", "Register"], horizontal=True)
 
                 username = st.text_input("Username")
@@ -334,7 +332,6 @@ class DataTransformer:
                 st.error(f"Execution error: {str(e)}")
 
     def _create_version(self, name, df, operation):
-        # If the dataset name doesn't already exist, initialize it properly:
         if name not in st.session_state.datasets:
             st.session_state.datasets[name] = df
             st.session_state.versions[name] = [df.copy()]
@@ -349,7 +346,7 @@ class DataTransformer:
 # --------------------------
 class Visualizer:
     def show_interface(self):
-        with st.expander("📊 Advanced Visualization", expanded=True):
+        with st.expander("📊 Visualization", expanded=True):
             dataset = DataManager().dataset_selector("visualization")
             if not dataset:
                 return
@@ -473,7 +470,7 @@ class MLProcessor:
                     X = df.drop(columns=[target])
                     y = df[target]
 
-                    # Convert non-numerical columns if necessary (quick fix)
+                    # Convert non-numerical columns if necessary
                     for col in X.select_dtypes(include=['object', 'category']).columns:
                         X[col], _ = X[col].factorize()
 
@@ -528,7 +525,7 @@ class MLProcessor:
 def main():
     auth = AuthSystem()
     if auth.authenticate():
-        st.title(f"🧠 DataForge Pro - Welcome {st.session_state.auth['username']}")
+        st.title(f"🧠 DataForge Basic - Welcome {st.session_state.auth['username']}")
 
         data_manager = DataManager()
         data_manager.handle_upload()
@@ -540,21 +537,36 @@ def main():
             "Data Profiling"
         ])
 
+        # Tab 1: Data Transformation
         with tab1:
             DataTransformer().show_interface()
 
+        # Tab 2: Visualization
         with tab2:
             Visualizer().show_interface()
 
+        # Tab 3: Machine Learning
         with tab3:
             MLProcessor().show_interface()
 
+        # Tab 4: Basic Data Profiling (no external library)
         with tab4:
             dataset = data_manager.dataset_selector("profile")
-            if dataset and st.button("Generate Profile Report"):
-                # Use ydata_profiling's ProfileReport
-                pr = ProfileReport(st.session_state.datasets[dataset])
-                st.components.v1.html(pr.to_html(), height=800, scrolling=True)
+            if dataset:
+                df = st.session_state.datasets[dataset]
+                st.write("### Quick Data Overview")
+                st.write("**Shape**:", df.shape)
+                st.write("**Info**:")
+                buf = st.text_area("DataFrame Info", df.info(buf=None))  # Will print to console, so show shape as fallback
+
+                st.write("**Head**:")
+                st.dataframe(df.head())
+
+                st.write("**Statistical Summary** (Numeric Columns):")
+                st.dataframe(df.describe())
+
+                st.write("**Missing Values**:")
+                st.dataframe(df.isnull().sum())
 
 if __name__ == "__main__":
     main()
