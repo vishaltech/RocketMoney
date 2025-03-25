@@ -8,20 +8,12 @@ import graphviz
 from streamlit_ace import st_ace
 from pandasql import sqldf
 
-# Optional interactive grid: if not installed, fallback to st.dataframe.
+# Optional interactive grid: if not available, fall back to st.dataframe.
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder
     use_aggrid = True
 except ImportError:
     use_aggrid = False
-
-# Optional: Google Drive integration using PyDrive2.
-try:
-    from pydrive2.auth import GoogleAuth
-    from pydrive2.drive import GoogleDrive
-    use_gdrive = True
-except ImportError:
-    use_gdrive = False
 
 # -------------------------------------------------------------------
 # Page Configuration & Custom Styling
@@ -44,10 +36,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# Helper Functions
+# Helper Function: Process Uploaded File
 # -------------------------------------------------------------------
 def process_file(uploaded_file):
-    """Load a CSV, Excel, or Parquet file into a dict of DataFrames."""
     ext = Path(uploaded_file.name).suffix.lower()
     try:
         if ext == ".csv":
@@ -60,28 +51,8 @@ def process_file(uploaded_file):
         st.error(f"Error processing file: {e}")
         return None
 
-# Google Drive helper functions (requires PyDrive2 and proper credentials)
-def authenticate_drive():
-    """Authenticate with Google Drive via OAuth. Ensure 'client_secrets.json' is provided."""
-    gauth = GoogleAuth()
-    gauth.LocalWebserverAuth()  # This will open a local webserver for OAuth
-    drive = GoogleDrive(gauth)
-    return drive
-
-def list_drive_files(drive, folder_id="root"):
-    """List files in a specified Google Drive folder."""
-    file_list = drive.ListFile({'q': f"'{folder_id}' in parents and trashed=false"}).GetList()
-    return file_list
-
-def upload_file_to_drive(drive, file_path, file_title):
-    """Upload a local file to Google Drive."""
-    file_drive = drive.CreateFile({'title': file_title})
-    file_drive.SetContentFile(file_path)
-    file_drive.Upload()
-    return file_drive['id']
-
 # -------------------------------------------------------------------
-# Sidebar: Upload Primary & Secondary Data
+# Sidebar: Upload Primary Data (Secondary data merge removed)
 # -------------------------------------------------------------------
 st.sidebar.header("Upload Primary Data")
 uploaded_file = st.sidebar.file_uploader("Choose CSV, Excel, or Parquet", type=["csv", "xlsx", "parquet"])
@@ -96,18 +67,12 @@ else:
     st.info("Please upload a primary data file.")
     st.stop()
 
-st.sidebar.header("Upload Secondary Data (Optional)")
-uploaded_file2 = st.sidebar.file_uploader("Secondary File", type=["csv", "xlsx", "parquet"], key="file2")
-if uploaded_file2:
-    data2 = process_file(uploaded_file2)
-    if data2:
-        sheet_names2 = list(data2.keys())
-        sheet_selected2 = st.sidebar.selectbox("Select Sheet (Secondary)", sheet_names2, key="sheet2")
-        df2 = data2[sheet_selected2]
-    else:
-        df2 = None
-else:
-    df2 = None
+# Store the uploaded data in session state (so transformations persist)
+if "df" not in st.session_state:
+    st.session_state.df = df
+
+# For convenience, define a local reference (will update after transformations)
+df = st.session_state.df
 
 # -------------------------------------------------------------------
 # Initialize Session State for Data Lineage & SQL History
@@ -118,7 +83,7 @@ if "sql_history" not in st.session_state:
     st.session_state.sql_history = []
 
 # -------------------------------------------------------------------
-# Create Tabs for All Features (10 Tabs including Google Drive)
+# Create Tabs for All Features (8 Tabs)
 # -------------------------------------------------------------------
 tabs = st.tabs([
     "Data Preview & Filtering",
@@ -128,10 +93,11 @@ tabs = st.tabs([
     "Data Lineage & Transformations",
     "Pivot Table Builder",
     "Advanced Analytics",
-    "Custom Dashboard",
-    "Data Merge",
-    "Google Drive Integration"
+    "Custom Dashboard"
 ])
+
+# In every tab, update df from session_state so transformations persist
+df = st.session_state.df
 
 # -------------------------------------------------------------------
 # Tab 1: Data Preview & Advanced Filtering
@@ -142,22 +108,16 @@ with tabs[0]:
     selected_columns = st.multiselect("Select columns to display", all_columns, default=all_columns)
     df_display = df[selected_columns] if selected_columns else df
     with st.expander("Add Filters"):
-        filter_conditions = []
         for col in df_display.columns:
             if pd.api.types.is_numeric_dtype(df_display[col]):
                 min_val, max_val = float(df_display[col].min()), float(df_display[col].max())
                 condition = st.slider(f"Filter {col}", min_val, max_val, (min_val, max_val))
-                filter_conditions.append((col, condition))
+                df_display = df_display[(df_display[col] >= condition[0]) & (df_display[col] <= condition[1])]
             elif pd.api.types.is_string_dtype(df_display[col]):
                 unique_vals = df_display[col].dropna().unique().tolist()
                 if unique_vals:
                     condition = st.multiselect(f"Filter {col}", unique_vals, default=unique_vals)
-                    filter_conditions.append((col, condition))
-        for col, condition in filter_conditions:
-            if isinstance(condition, tuple):
-                df_display = df_display[(df_display[col] >= condition[0]) & (df_display[col] <= condition[1])]
-            elif isinstance(condition, list):
-                df_display = df_display[df_display[col].isin(condition)]
+                    df_display = df_display[df_display[col].isin(condition)]
     search_query = st.text_input("Search (in displayed columns)")
     if search_query:
         mask = df_display.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)
@@ -286,23 +246,45 @@ with tabs[3]:
 with tabs[4]:
     st.header("Data Lineage & Transformations")
     st.write("Log your column transformation steps and visualize the lineage.")
+    # Transformation form with enhanced derived column editor
     with st.form("lineage_form"):
         trans_type = st.selectbox("Transformation Type", ["Rename", "Create Derived Column", "Drop Column"], key="trans_type")
         if trans_type in ["Rename", "Drop Column"]:
             source = st.selectbox("Select Column", df.columns.tolist(), key="lineage_source")
+            formula = None  # Not used in these cases.
         else:
-            source = st.multiselect("Select Source Columns", df.columns.tolist(), key="lineage_sources")
+            # For derived column, show a small ACE editor to let the user type a formula.
+            st.write("Enter a formula using existing column names (e.g., col1 + col2 * 2):")
+            formula = st_ace(language="python", theme="monokai", key="calc_formula", height=100,
+                             placeholder="e.g., col1 + col2 * 2")
+            source = None  # Not used here.
         target = st.text_input("New Column Name", key="lineage_target")
         submitted = st.form_submit_button("Add Transformation")
         if submitted:
             if not target:
                 st.error("Please provide a target column name.")
-            elif trans_type in ["Rename", "Drop Column"] and not source:
-                st.error("Please select a source column.")
+            elif trans_type == "Create Derived Column" and not formula.strip():
+                st.error("Please provide a formula for the derived column.")
             else:
-                step = {"type": trans_type, "source": source, "target": target}
+                # Apply transformation immediately to st.session_state.df
+                if trans_type == "Rename":
+                    st.session_state.df = st.session_state.df.rename(columns={source: target})
+                elif trans_type == "Drop Column":
+                    st.session_state.df = st.session_state.df.drop(columns=[source])
+                elif trans_type == "Create Derived Column":
+                    try:
+                        # Use df.eval to compute the new column; user must use valid Python expression.
+                        st.session_state.df[target] = st.session_state.df.eval(formula)
+                    except Exception as e:
+                        st.error(f"Error computing derived column: {e}")
+                        st.stop()
+                # Log the transformation step (include formula if applicable)
+                step = {"type": trans_type, "source": source if source else formula, "target": target}
                 st.session_state.lineage_steps.append(step)
-                st.success(f"Added transformation: {trans_type} {source} → {target}")
+                st.success(f"Transformation applied: {trans_type} → {target}")
+    # Update local df after transformation
+    df = st.session_state.df
+    # Display current lineage steps
     if st.session_state.lineage_steps:
         st.write("**Transformation Log:**")
         for i, step in enumerate(st.session_state.lineage_steps, 1):
@@ -310,16 +292,13 @@ with tabs[4]:
     if st.button("Clear All Lineage Steps"):
         st.session_state.lineage_steps = []
         st.success("Lineage steps cleared.")
+    # Build lineage graph using Graphviz
     dot = graphviz.Digraph()
     for col in df.columns:
         dot.node(col, col)
     for step in st.session_state.lineage_steps:
         if step["type"] in ["Rename", "Create Derived Column"]:
-            if isinstance(step["source"], list):
-                for src in step["source"]:
-                    dot.edge(src, step["target"], label=step["type"])
-            else:
-                dot.edge(step["source"], step["target"], label=step["type"])
+            dot.edge(step["source"] if step["type"]=="Rename" else step["source"], step["target"], label=step["type"])
         elif step["type"] == "Drop Column":
             dot.node(step["target"], step["target"], style="filled", fillcolor="red")
             dot.edge(step["target"], "Dropped", label="Dropped")
@@ -419,70 +398,3 @@ with tabs[7]:
                 st.error("Please select a numeric column.")
     else:
         st.write("No numeric columns available for dashboard metrics.")
-
-# -------------------------------------------------------------------
-# Tab 9: Data Merge
-# -------------------------------------------------------------------
-with tabs[8]:
-    st.header("Data Merge")
-    if df2 is None:
-        st.write("No secondary data uploaded. Use the sidebar to upload a secondary data file.")
-    else:
-        st.write("Merge the primary and secondary datasets.")
-        merge_type = st.selectbox("Merge Type", ["inner", "left", "right", "outer"], key="merge_type")
-        primary_key = st.selectbox("Select Primary Key", df.columns.tolist(), key="merge_key1")
-        secondary_key = st.selectbox("Select Secondary Key", df2.columns.tolist(), key="merge_key2")
-        if st.button("Merge Datasets"):
-            try:
-                merged_df = pd.merge(df, df2, left_on=primary_key, right_on=secondary_key, how=merge_type)
-                st.success(f"Merged dataset shape: {merged_df.shape}")
-                if use_aggrid:
-                    gb = GridOptionsBuilder.from_dataframe(merged_df)
-                    gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
-                    gb.configure_side_bar()
-                    grid_options = gb.build()
-                    AgGrid(merged_df, gridOptions=grid_options, height=500, theme="streamlit")
-                else:
-                    st.dataframe(merged_df)
-                csv_data = merged_df.to_csv(index=False).encode("utf-8")
-                st.download_button("Download Merged Data as CSV", data=csv_data, file_name="merged_data.csv", mime="text/csv")
-            except Exception as e:
-                st.error(f"Error merging datasets: {e}")
-
-# -------------------------------------------------------------------
-# Tab 10: Google Drive Integration
-# -------------------------------------------------------------------
-with tabs[9]:
-    st.header("Google Drive Integration")
-    st.write("Authenticate with your Google Drive account and manage files.")
-    if not use_gdrive:
-        st.error("PyDrive2 is not installed. Google Drive integration is not available.")
-    else:
-        if st.button("Authenticate with Google Drive"):
-            try:
-                drive = authenticate_drive()
-                st.session_state.drive = drive
-                st.success("Authenticated with Google Drive!")
-            except Exception as e:
-                st.error(f"Authentication failed: {e}")
-        if "drive" in st.session_state:
-            drive = st.session_state.drive
-            if st.button("List Files in Root Folder"):
-                try:
-                    files = list_drive_files(drive, "root")
-                    for f in files:
-                        st.write(f"Title: {f['title']}  |  ID: {f['id']}")
-                except Exception as e:
-                    st.error(f"Error listing files: {e}")
-            uploaded_to_drive = st.file_uploader("Select file to upload to Google Drive", key="gdrive_upload")
-            if uploaded_to_drive:
-                try:
-                    with open(uploaded_to_drive.name, "wb") as f:
-                        f.write(uploaded_to_drive.getbuffer())
-                    file_id = upload_file_to_drive(drive, uploaded_to_drive.name, uploaded_to_drive.name)
-                    st.success(f"File uploaded to Google Drive with ID: {file_id}")
-                except Exception as e:
-                    st.error(f"Error uploading file: {e}")
-        else:
-            st.info("Please authenticate with Google Drive first.")
-
