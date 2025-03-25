@@ -5,3 +5,4 @@ plotly
 pandasql
 streamlit-ace
 openpyxl
+graphviz
