@@ -2,517 +2,286 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from pathlib import Path
 import graphviz
-from streamlit_ace import st_ace
-from pandasql import sqldf
 from io import BytesIO
 import zipfile
+from pathlib import Path
+from streamlit_ace import st_ace
 
-# Additional UI libraries
-from streamlit_option_menu import option_menu
-from streamlit_tags import st_tags
-from ydata_profiling import ProfileReport
-import streamlit.components.v1 as components
+# -----------------------------
+# Minimal Requirements
+# -----------------------------
+# - streamlit
+# - pandas
+# - numpy
+# - plotly
+# - streamlit-ace
+# - openpyxl
+# - graphviz
+# - pyarrow
 
-# Optional interactive grid: if not available, fall back to st.dataframe.
-try:
-    from st_aggrid import AgGrid, GridOptionsBuilder
-    use_aggrid = True
-except ImportError:
-    use_aggrid = False
+st.set_page_config(page_title="Minimal Data Analyzer", layout="wide")
 
-# -------------------------------------------------------------------
-# Page Configuration & Custom Styling
-# -------------------------------------------------------------------
-st.set_page_config(page_title="Ultimate Data Analyzer Pro", layout="wide")
-st.markdown("""
-<style>
-  body {
-      background: linear-gradient(to right, #ece9e6, #ffffff);
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  }
-  .sidebar .sidebar-content { background: #ffffff; }
-  /* Card styling for dashboard metrics */
-  .card {
-      background-color: #ffffff;
-      padding: 20px;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      margin: 10px;
-  }
-  .card h3 { margin: 0 0 10px 0; color: #333; }
-  .field-list { background: #eef; padding: 8px; border-radius: 8px; margin-top: 5px; }
-  .header-title { font-size: 2rem; font-weight: 600; text-align: center; margin-bottom: 20px; }
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------------------------------------------------
-# Sidebar: Option Menu for Navigation & Data Upload
-# -------------------------------------------------------------------
-with st.sidebar:
-    choice = option_menu("Main Menu", ["Upload Data", "Settings"], 
-                         icons=["upload", "gear-fill"], menu_icon="app-indicator", default_index=0)
-    
-    if choice == "Upload Data":
-        st.header("Upload Primary Data")
-        uploaded_file = st.file_uploader("Choose CSV, Excel, or Parquet", type=["csv", "xlsx", "parquet"])
-        if uploaded_file:
-            def process_file(uploaded_file):
-                ext = Path(uploaded_file.name).suffix.lower()
-                try:
-                    if ext == ".csv":
-                        return {"Sheet1": pd.read_csv(uploaded_file)}
-                    elif ext == ".xlsx":
-                        return pd.read_excel(uploaded_file, sheet_name=None)
-                    elif ext == ".parquet":
-                        return {"Sheet1": pd.read_parquet(uploaded_file)}
-                except Exception as e:
-                    st.error(f"Error processing file: {e}")
-                    return None
-            data = process_file(uploaded_file)
-            if data is not None:
-                sheet_names = list(data.keys())
-                sheet_selected = st.selectbox("Select Sheet", sheet_names)
-                df = data[sheet_selected]
-                st.session_state.df = df.copy()
-                st.success("Data uploaded successfully!")
-        else:
-            st.info("Please upload a file.")
-    elif choice == "Settings":
-        st.header("Settings")
-        dark_mode = st.checkbox("Enable Dark Mode", value=False)
-        if dark_mode:
-            st.markdown("""
-            <style>
-              body { background: #1e1e1e; color: #ccc; }
-              .card { background-color: #333; color: #eee; }
-            </style>
-            """, unsafe_allow_html=True)
-
-# If data not in session state, stop.
+# ----------------------------------------
+# Session State Initialization
+# ----------------------------------------
+if "df_original" not in st.session_state:
+    st.session_state.df_original = None  # The unmodified data
 if "df" not in st.session_state:
+    st.session_state.df = None  # The currently filtered/transformed data
+if "lineage" not in st.session_state:
+    st.session_state.lineage = []  # List of transformation steps
+
+# ----------------------------------------
+# Upload Section
+# ----------------------------------------
+st.title("Minimal Data Analyzer")
+
+uploaded_file = st.file_uploader("Upload a CSV, Excel, or Parquet file", type=["csv", "xlsx", "parquet"])
+if uploaded_file:
+    ext = Path(uploaded_file.name).suffix.lower()
+    try:
+        if ext == ".csv":
+            df_tmp = pd.read_csv(uploaded_file)
+        elif ext == ".xlsx":
+            # If multiple sheets, just take the first
+            all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+            first_sheet = list(all_sheets.keys())[0]
+            df_tmp = all_sheets[first_sheet]
+        elif ext == ".parquet":
+            df_tmp = pd.read_parquet(uploaded_file)
+        st.session_state.df_original = df_tmp.copy()
+        st.session_state.df = df_tmp.copy()
+        st.session_state.lineage = []
+        st.success("File uploaded and data loaded!")
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+
+if st.session_state.df is None:
     st.stop()
 
 df = st.session_state.df
 
-# -------------------------------------------------------------------
-# Initialize Session State for Data Lineage & SQL History
-# -------------------------------------------------------------------
-if "lineage_steps" not in st.session_state:
-    st.session_state.lineage_steps = []
-if "sql_history" not in st.session_state:
-    st.session_state.sql_history = []
-
-# -------------------------------------------------------------------
-# Main Tabs for Features
-# -------------------------------------------------------------------
-tabs = st.tabs([
-    "Data Preview & Filtering",
-    "Summary & Profiling",
-    "Data Profile",
-    "Advanced Visualizations",
-    "SQL Query Editor",
-    "Data Lineage & Transformations",
-    "Pivot Table Builder",
-    "Advanced Analytics",
-    "Custom Dashboard"
+# ----------------------------------------
+# Tabs for Features
+# ----------------------------------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Data", "Filter", "Transform", "Visualize", "Download"
 ])
 
-# Always update df from session state.
-df = st.session_state.df
+# ----------------------------------------
+# Tab 1: Data Preview
+# ----------------------------------------
+with tab1:
+    st.subheader("Data Preview")
+    st.dataframe(df.reset_index(drop=True))  # Show data with index reset
 
-# -------------------------------------------------------------------
-# Tab 1: Data Preview & Filtering
-# -------------------------------------------------------------------
-with tabs[0]:
-    st.markdown("<div class='header-title'>Data Preview & Filtering</div>", unsafe_allow_html=True)
-    # Reset index so we don't have a "row id" column in the display
-    df_display = df.reset_index(drop=True).copy()
-    
-    # Let user pick columns to display
-    all_columns = df_display.columns.tolist()
-    selected_columns = st.multiselect("Select columns to display", all_columns, default=all_columns)
-    df_display = df_display[selected_columns] if selected_columns else df_display
-    
-    # Filters (no st.form, so changes happen immediately)
-    with st.expander("Add Filters"):
-        for col in df_display.columns:
-            col_data = df_display[col]
-            # Numeric filter
-            if pd.api.types.is_numeric_dtype(col_data):
-                min_val, max_val = float(col_data.min()), float(col_data.max())
-                filter_vals = st.slider(
-                    f"Filter {col}", 
-                    min_val, 
-                    max_val, 
-                    (min_val, max_val)
-                )
-                df_display = df_display[
-                    (df_display[col] >= filter_vals[0]) &
-                    (df_display[col] <= filter_vals[1])
+# ----------------------------------------
+# Tab 2: Filtering
+# ----------------------------------------
+with tab2:
+    st.subheader("Filtering")
+
+    # Provide a "Reset Filter" button
+    if st.button("Reset to Original Data"):
+        st.session_state.df = st.session_state.df_original.copy()
+        st.session_state.lineage = []
+        st.success("Data reset to original file contents!")
+        st.experimental_rerun()
+
+    st.write("Select a column to filter on:")
+    column_to_filter = st.selectbox("Column", df.columns.tolist())
+
+    if column_to_filter:
+        col_data = df[column_to_filter]
+        # If numeric, show a slider
+        if pd.api.types.is_numeric_dtype(col_data):
+            min_val, max_val = float(col_data.min()), float(col_data.max())
+            chosen_range = st.slider(
+                "Filter range",
+                min_val,
+                max_val,
+                (min_val, max_val)
+            )
+            if st.button("Apply Numeric Filter"):
+                st.session_state.df = st.session_state.df[
+                    (st.session_state.df[column_to_filter] >= chosen_range[0]) &
+                    (st.session_state.df[column_to_filter] <= chosen_range[1])
                 ]
-            # Categorical filter
-            elif pd.api.types.is_string_dtype(col_data) or pd.api.types.is_object_dtype(col_data):
-                unique_vals = col_data.dropna().unique().tolist()
-                if unique_vals:
-                    filter_list = st.multiselect(f"Filter {col}", unique_vals, default=unique_vals)
-                    df_display = df_display[df_display[col].isin(filter_list)]
-    
-    # Search
-    search_query = st.text_input("Search (in displayed columns)")
-    if search_query:
-        mask = df_display.apply(
-            lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), 
-            axis=1
-        )
-        df_display = df_display[mask]
-    
-    # Show the filtered data
-    if use_aggrid:
-        gb = GridOptionsBuilder.from_dataframe(df_display)
-        gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
-        gb.configure_side_bar()
-        grid_options = gb.build()
-        AgGrid(df_display, gridOptions=grid_options, height=500, theme="streamlit")
-    else:
-        st.dataframe(df_display)
-
-# -------------------------------------------------------------------
-# Tab 2: Summary & Profiling
-# -------------------------------------------------------------------
-with tabs[1]:
-    st.markdown("<div class='header-title'>Summary & Profiling</div>", unsafe_allow_html=True)
-    st.write("**Data Shape:**", df.shape)
-    st.write("**Data Types:**")
-    st.dataframe(pd.DataFrame(df.dtypes, columns=["Type"]))
-    st.write("**Summary Statistics:**")
-    st.dataframe(df.describe(include='all').T)
-    
-    st.write("**Missing Values:**")
-    missing = df.isnull().sum()
-    missing = missing[missing > 0]
-    if not missing.empty:
-        fig_missing = px.bar(x=missing.index, y=missing.values, 
-                             labels={'x':"Column", 'y':"Missing Count"},
-                             title="Missing Values Count")
-        st.plotly_chart(fig_missing, use_container_width=True)
-    else:
-        st.write("No missing values detected.")
-    
-    st.subheader("Outlier Detection (IQR Method)")
-    outlier_info = {}
-    for col in df.select_dtypes(include=np.number).columns:
-        Q1, Q3 = df[col].quantile(0.25), df[col].quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound, upper_bound = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-        outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-        outlier_info[col] = outliers.shape[0]
-    st.dataframe(pd.DataFrame(outlier_info, index=["Outlier Count"]).T)
-
-# -------------------------------------------------------------------
-# Tab 3: Data Profile Report
-# -------------------------------------------------------------------
-with tabs[2]:
-    st.markdown("<div class='header-title'>Data Profile Report</div>", unsafe_allow_html=True)
-    if st.button("Generate Profile Report"):
-        profile = ProfileReport(df, explorative=True)
-        profile_html = profile.to_html()
-        components.html(profile_html, height=800, scrolling=True)
-
-# -------------------------------------------------------------------
-# Tab 4: Advanced Visualizations
-# -------------------------------------------------------------------
-with tabs[3]:
-    st.markdown("<div class='header-title'>Advanced Visualizations</div>", unsafe_allow_html=True)
-    numeric_columns = df.select_dtypes(include=np.number).columns.tolist()
-    categorical_columns = df.select_dtypes(include=["object", "category"]).columns.tolist()
-    
-    if numeric_columns:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            x_axis = st.selectbox("X-Axis", numeric_columns, key="viz_x")
-        with col2:
-            y_axis = st.selectbox("Y-Axis", numeric_columns, key="viz_y")
-        with col3:
-            color_option = st.selectbox("Color By (optional)", [None] + categorical_columns, key="viz_color")
-        
-        chart_type = st.selectbox(
-            "Chart Type", 
-            ["Scatter", "Line", "Bar", "Histogram", "Box", "Violin"], 
-            key="chart_type"
-        )
-        
-        facet_row = st.selectbox("Facet Row (optional)", [None] + categorical_columns, key="facet_row")
-        facet_col = st.selectbox("Facet Column (optional)", [None] + categorical_columns, key="facet_col")
-        
-        if st.button("Generate Chart", key="gen_chart"):
-            try:
-                if chart_type == "Scatter":
-                    fig = px.scatter(df, x=x_axis, y=y_axis, color=color_option,
-                                     facet_row=facet_row, facet_col=facet_col)
-                elif chart_type == "Line":
-                    fig = px.line(df, x=x_axis, y=y_axis, color=color_option,
-                                  facet_row=facet_row, facet_col=facet_col)
-                elif chart_type == "Bar":
-                    fig = px.bar(df, x=x_axis, y=y_axis, color=color_option,
-                                 facet_row=facet_row, facet_col=facet_col)
-                elif chart_type == "Histogram":
-                    fig = px.histogram(df, x=x_axis, color=color_option,
-                                       facet_row=facet_row, facet_col=facet_col)
-                elif chart_type == "Box":
-                    fig = px.box(df, x=x_axis, y=y_axis, color=color_option,
-                                 facet_row=facet_row, facet_col=facet_col)
-                elif chart_type == "Violin":
-                    fig = px.violin(df, x=x_axis, y=y_axis, color=color_option,
-                                    box=True, points="all",
-                                    facet_row=facet_row, facet_col=facet_col)
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error creating chart: {e}")
-    else:
-        st.write("Not enough numeric columns available for visualization.")
-    
-    st.subheader("Interactive Correlation Matrix")
-    num_df = df.select_dtypes(include=np.number)
-    if not num_df.empty:
-        corr = num_df.corr()
-        fig_corr = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation Matrix")
-        st.plotly_chart(fig_corr, use_container_width=True)
-        
-        col_pair = st.columns(2)
-        with col_pair[0]:
-            var1 = st.selectbox("Variable 1", numeric_columns, key="corr_var1")
-        with col_pair[1]:
-            var2 = st.selectbox("Variable 2", numeric_columns, key="corr_var2")
-        
-        if st.button("Show Scatter for Selected Variables"):
-            scatter_fig = px.scatter(df, x=var1, y=var2)
-            st.plotly_chart(scatter_fig, use_container_width=True)
-    else:
-        st.write("No numeric data for correlation analysis.")
-
-# -------------------------------------------------------------------
-# Tab 5: Data Lineage & Transformations
-# -------------------------------------------------------------------
-with tabs[4]:
-    st.markdown("<div class='header-title'>Data Lineage & Transformations</div>", unsafe_allow_html=True)
-    st.write("Log your transformation steps and preview the updated data.")
-    
-    # Use a form so the user must explicitly click the button to apply transformations.
-    with st.form("lineage_form"):
-        trans_type = st.selectbox("Transformation Type", ["Rename", "Create Derived Column", "Drop Column"], key="trans_type")
-        
-        if trans_type in ["Rename", "Drop Column"]:
-            source = st.selectbox("Select Column", df.columns.tolist(), key="lineage_source")
-            formula = None
+                # Log the step
+                st.session_state.lineage.append({
+                    "type": "Filter (Numeric)",
+                    "column": column_to_filter,
+                    "range": chosen_range
+                })
+                st.success(f"Filtered {column_to_filter} to between {chosen_range[0]} and {chosen_range[1]}")
+                st.experimental_rerun()
         else:
-            st.write("Enter a formula using existing column names (e.g., col1 + col2 * 2).")
+            # Categorical or string data
+            unique_vals = col_data.dropna().unique().tolist()
+            chosen_vals = st.multiselect("Values to keep", unique_vals, default=unique_vals)
+            if st.button("Apply Categorical Filter"):
+                st.session_state.df = st.session_state.df[st.session_state.df[column_to_filter].isin(chosen_vals)]
+                st.session_state.lineage.append({
+                    "type": "Filter (Categorical)",
+                    "column": column_to_filter,
+                    "values": chosen_vals
+                })
+                st.success(f"Filtered {column_to_filter} to {chosen_vals}")
+                st.experimental_rerun()
+
+    st.write("Filtered Data Preview:")
+    st.dataframe(st.session_state.df.reset_index(drop=True))
+
+# ----------------------------------------
+# Tab 3: Transform
+# ----------------------------------------
+with tab3:
+    st.subheader("Transform Data (Rename, Drop, or Derived Column)")
+
+    # Show the lineage steps so far
+    if st.session_state.lineage:
+        st.write("**Transformation Log:**")
+        st.dataframe(pd.DataFrame(st.session_state.lineage))
+    else:
+        st.write("No transformations applied yet.")
+
+    # Minimal lineage graph
+    dot = graphviz.Digraph()
+    # Make nodes for each column
+    for c in df.columns:
+        dot.node(c, c)
+
+    for step in st.session_state.lineage:
+        if step["type"] in ["Rename", "Create Derived Column"]:
+            src = step.get("source") or step.get("formula", "unknown")
+            tgt = step["target"]
+            dot.edge(str(src), str(tgt), label=step["type"])
+        elif step["type"] == "Drop":
+            col = step["column"]
+            dot.node(col, col, style="filled", fillcolor="red")
+            dot.edge(col, "Dropped", label="Drop")
+    dot.node("Dropped", "Dropped", style="filled", fillcolor="lightgray")
+
+    st.graphviz_chart(dot)
+
+    # A form for transformations
+    with st.form("transform_form"):
+        transform_type = st.selectbox("Select a Transformation", ["Rename", "Drop", "Create Derived Column"])
+
+        if transform_type == "Rename":
+            col_to_rename = st.selectbox("Column to rename", df.columns.tolist())
+            new_name = st.text_input("New column name")
+        elif transform_type == "Drop":
+            col_to_drop = st.selectbox("Column to drop", df.columns.tolist())
+        else:  # Create Derived Column
+            st.write("Use existing columns in an expression, e.g. `col1 + col2 * 2`")
             formula = st_ace(
                 language="python",
                 theme="monokai",
-                key="calc_formula",
+                placeholder="e.g. col1 + col2 * 2",
+                key="derived_formula",
                 height=100,
-                placeholder="e.g., col1 + col2 * 2",
                 options={"enableBasicAutocompletion": True, "enableLiveAutocompletion": True}
             )
-            source = None
-            
-            # Show available fields as a reference
-            st.markdown(
-                "<div class='field-list'><strong>Available fields:</strong> " 
-                + ", ".join(df.columns.tolist()) 
-                + "</div>", 
-                unsafe_allow_html=True
-            )
-        
-        target = st.text_input("New Column Name", key="lineage_target")
-        
-        # This is the key to avoid "Missing Submit Button" warnings
-        submitted = st.form_submit_button("Add Transformation")
-        
-        if submitted:
-            if not target:
-                st.error("Please provide a target column name.")
-            elif trans_type == "Create Derived Column" and (not formula or not formula.strip()):
-                st.error("Please provide a formula for the derived column.")
+            new_col_name = st.text_input("New column name for derived expression")
+
+        submit_transform = st.form_submit_button("Apply Transformation")
+
+    if submit_transform:
+        try:
+            if transform_type == "Rename":
+                if not new_name.strip():
+                    st.error("Please provide a valid new name.")
+                else:
+                    st.session_state.df = st.session_state.df.rename(columns={col_to_rename: new_name})
+                    st.session_state.lineage.append({
+                        "type": "Rename",
+                        "source": col_to_rename,
+                        "target": new_name
+                    })
+                    st.success(f"Renamed {col_to_rename} to {new_name}")
+                    st.experimental_rerun()
+            elif transform_type == "Drop":
+                st.session_state.df = st.session_state.df.drop(columns=[col_to_drop])
+                st.session_state.lineage.append({
+                    "type": "Drop",
+                    "column": col_to_drop
+                })
+                st.success(f"Dropped {col_to_drop}")
+                st.experimental_rerun()
             else:
-                # Apply the transformation
-                if trans_type == "Rename":
-                    st.session_state.df = st.session_state.df.rename(columns={source: target})
-                elif trans_type == "Drop Column":
-                    st.session_state.df = st.session_state.df.drop(columns=[source])
-                elif trans_type == "Create Derived Column":
-                    try:
-                        st.session_state.df[target] = st.session_state.df.eval(formula)
-                    except Exception as e:
-                        st.error(f"Error computing derived column: {e}")
-                        st.stop()
-                
-                step = {
-                    "type": trans_type,
-                    "source": source if source else formula,
-                    "target": target
-                }
-                st.session_state.lineage_steps.append(step)
-                st.success(f"Transformation applied: {trans_type} → {target}")
-    
-    # Update df after transformations
-    df = st.session_state.df
-    
-    # Show transformation log
-    if st.session_state.lineage_steps:
-        st.write("**Transformation Log:**")
-        st.dataframe(pd.DataFrame(st.session_state.lineage_steps))
-    
-    if st.button("Clear All Lineage Steps"):
-        st.session_state.lineage_steps = []
-        st.success("Lineage steps cleared.")
-    
-    # Build a lineage graph
-    dot = graphviz.Digraph()
-    for col in df.columns:
-        dot.node(col, col)
-    for step in st.session_state.lineage_steps:
-        if step["type"] in ["Rename", "Create Derived Column"]:
-            dot.edge(step["source"], step["target"], label=step["type"])
-        elif step["type"] == "Drop Column":
-            dot.node(step["target"], step["target"], style="filled", fillcolor="red")
-            dot.edge(step["target"], "Dropped", label="Dropped")
-    dot.node("Dropped", "Dropped", style="filled", fillcolor="lightgray")
-    
-    st.subheader("Lineage Graph")
-    st.graphviz_chart(dot)
-    
-    st.subheader("Preview & Download Updated Data")
+                # Create Derived Column
+                if not formula or not formula.strip():
+                    st.error("Please provide a formula.")
+                elif not new_col_name.strip():
+                    st.error("Please provide a new column name.")
+                else:
+                    st.session_state.df[new_col_name] = st.session_state.df.eval(formula)
+                    st.session_state.lineage.append({
+                        "type": "Create Derived Column",
+                        "source": formula,
+                        "target": new_col_name
+                    })
+                    st.success(f"Created derived column {new_col_name} using formula: {formula}")
+                    st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Transformation error: {e}")
+
+# ----------------------------------------
+# Tab 4: Visualize
+# ----------------------------------------
+with tab4:
+    st.subheader("Visualize Data with Plotly")
+    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
+
+    x_choice = st.selectbox("X Axis", df.columns.tolist())
+    y_choice = st.selectbox("Y Axis", df.columns.tolist())
+    color_choice = st.selectbox("Color By (optional)", [None] + df.columns.tolist())
+    chart_type = st.selectbox("Chart Type", ["Scatter", "Bar", "Line", "Histogram", "Box"])
+
+    if st.button("Generate Chart"):
+        try:
+            if chart_type == "Scatter":
+                fig = px.scatter(df, x=x_choice, y=y_choice, color=color_choice)
+            elif chart_type == "Bar":
+                fig = px.bar(df, x=x_choice, y=y_choice, color=color_choice)
+            elif chart_type == "Line":
+                fig = px.line(df, x=x_choice, y=y_choice, color=color_choice)
+            elif chart_type == "Histogram":
+                fig = px.histogram(df, x=x_choice, color=color_choice)
+            else:
+                fig = px.box(df, x=x_choice, y=y_choice, color=color_choice)
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Visualization error: {e}")
+
+# ----------------------------------------
+# Tab 5: Download
+# ----------------------------------------
+with tab5:
+    st.subheader("Download Final Data")
     st.dataframe(df.reset_index(drop=True))
-    
+
     csv_data = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", data=csv_data, file_name="updated_data.csv", mime="text/csv")
-    
+
+    st.download_button(
+        label="Download as CSV",
+        data=csv_data,
+        file_name="final_data.csv",
+        mime="text/csv"
+    )
+
+    # Compressed ZIP
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("updated_data.csv", csv_data)
+        zf.writestr("final_data.csv", csv_data)
     zip_buffer.seek(0)
-    st.download_button("Download Compressed ZIP", data=zip_buffer, file_name="updated_data.zip", mime="application/zip")
 
-# -------------------------------------------------------------------
-# Tab 6: Pivot Table Builder
-# -------------------------------------------------------------------
-with tabs[5]:
-    st.markdown("<div class='header-title'>Pivot Table Builder</div>", unsafe_allow_html=True)
-    available_cols = df.columns.tolist()
-    index_col = st.selectbox("Select Index (rows)", available_cols, key="pivot_index")
-    col_col = st.selectbox("Select Column (optional)", [None] + available_cols, key="pivot_columns")
-    num_cols = df.select_dtypes(include=np.number).columns.tolist()
-    
-    if not num_cols:
-        st.write("No numeric columns available for pivot table values.")
-    else:
-        value_col = st.selectbox("Select Value Column (numeric)", num_cols, key="pivot_value")
-        agg_func = st.selectbox("Aggregation Function", ["sum", "mean", "count", "min", "max"], key="pivot_agg")
-        
-        if st.button("Generate Pivot Table", key="gen_pivot"):
-            try:
-                pivot = pd.pivot_table(
-                    df, 
-                    index=index_col, 
-                    columns=col_col if col_col else None,
-                    values=value_col, 
-                    aggfunc=agg_func
-                )
-                st.dataframe(pivot)
-                
-                if np.issubdtype(pivot.values.dtype, np.number):
-                    fig_pivot = px.imshow(
-                        pivot, 
-                        text_auto=True, 
-                        aspect="auto", 
-                        title="Pivot Table Heatmap"
-                    )
-                    st.plotly_chart(fig_pivot, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error creating pivot table: {e}")
-
-# -------------------------------------------------------------------
-# Tab 7: Advanced Analytics
-# -------------------------------------------------------------------
-with tabs[6]:
-    st.markdown("<div class='header-title'>Advanced Analytics</div>", unsafe_allow_html=True)
-    st.subheader("Anomaly Detection (IQR Method)")
-    anomaly_results = {}
-    for col in df.select_dtypes(include=np.number).columns:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        anomalies = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-        anomaly_results[col] = anomalies.shape[0]
-    st.dataframe(pd.DataFrame(anomaly_results, index=["Anomaly Count"]).T)
-    
-    st.subheader("Correlation Heatmap")
-    num_df = df.select_dtypes(include=np.number)
-    if not num_df.empty:
-        corr = num_df.corr()
-        fig_corr = go.Figure(
-            data=go.Heatmap(
-                z=corr.values,
-                x=corr.columns,
-                y=corr.index,
-                colorscale="Viridis",
-                zmin=-1,
-                zmax=1,
-                colorbar=dict(title="Correlation")
-            )
-        )
-        fig_corr.update_layout(
-            title="Correlation Heatmap",
-            xaxis_title="Features",
-            yaxis_title="Features"
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
-    else:
-        st.write("No numeric columns available for correlation analysis.")
-
-# -------------------------------------------------------------------
-# Tab 8: Custom Dashboard
-# -------------------------------------------------------------------
-with tabs[7]:
-    st.markdown("<div class='header-title'>Custom Dashboard</div>", unsafe_allow_html=True)
-    st.write("Build custom metric cards for key statistics.")
-    
-    metric_options = ["Mean", "Median", "Standard Deviation", "Count", "Min", "Max"]
-    selected_metric = st.selectbox("Select Metric", metric_options, key="dash_metric")
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-    
-    if numeric_cols:
-        column_to_analyze = st.selectbox("Select Column", numeric_cols, key="dash_column")
-        
-        if st.button("Show Metric Card", key="show_metric"):
-            if column_to_analyze:
-                if selected_metric == "Mean":
-                    value = df[column_to_analyze].mean()
-                elif selected_metric == "Median":
-                    value = df[column_to_analyze].median()
-                elif selected_metric == "Standard Deviation":
-                    value = df[column_to_analyze].std()
-                elif selected_metric == "Count":
-                    value = df[column_to_analyze].count()
-                elif selected_metric == "Min":
-                    value = df[column_to_analyze].min()
-                elif selected_metric == "Max":
-                    value = df[column_to_analyze].max()
-                
-                st.markdown(f"""
-                <div class="card">
-                    <h3>{selected_metric} of {column_to_analyze}</h3>
-                    <p style="font-size: 28px; font-weight: bold;">{value:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.error("Please select a numeric column.")
-    else:
-        st.write("No numeric columns available for dashboard metrics.")
+    st.download_button(
+        label="Download as ZIP",
+        data=zip_buffer,
+        file_name="final_data.zip",
+        mime="application/zip"
+    )
