@@ -10,6 +10,12 @@ from pandasql import sqldf
 from io import BytesIO
 import zipfile
 
+# Additional UI libraries
+from streamlit_option_menu import option_menu
+from streamlit_tags import st_tags
+from ydata_profiling import ProfileReport
+import streamlit.components.v1 as components
+
 # Optional interactive grid: if not available, fall back to st.dataframe.
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder
@@ -23,57 +29,73 @@ except ImportError:
 st.set_page_config(page_title="Ultimate Data Analyzer Pro", layout="wide")
 st.markdown("""
 <style>
-  body { background: #f4f7f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+  body {
+      background: linear-gradient(to right, #ece9e6, #ffffff);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  }
   .sidebar .sidebar-content { background: #ffffff; }
   /* Card styling for dashboard metrics */
   .card {
       background-color: #ffffff;
       padding: 20px;
       border-radius: 12px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
       margin: 10px;
   }
   .card h3 { margin: 0 0 10px 0; color: #333; }
+  .field-list { background: #eef; padding: 8px; border-radius: 8px; margin-top: 5px; }
+  .header-title { font-size: 2rem; font-weight: 600; text-align: center; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# Helper Function: Process Uploaded File
+# Sidebar: Option Menu for Navigation & Data Upload
 # -------------------------------------------------------------------
-def process_file(uploaded_file):
-    ext = Path(uploaded_file.name).suffix.lower()
-    try:
-        if ext == ".csv":
-            return {"Sheet1": pd.read_csv(uploaded_file)}
-        elif ext == ".xlsx":
-            return pd.read_excel(uploaded_file, sheet_name=None)
-        elif ext == ".parquet":
-            return {"Sheet1": pd.read_parquet(uploaded_file)}
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
-        return None
+with st.sidebar:
+    choice = option_menu("Main Menu", ["Upload Data", "Settings"], 
+                         icons=["upload", "gear-fill"], menu_icon="app-indicator", default_index=0)
+    
+    if choice == "Upload Data":
+        st.header("Upload Primary Data")
+        uploaded_file = st.file_uploader("Choose CSV, Excel, or Parquet", type=["csv", "xlsx", "parquet"])
+        if uploaded_file:
+            def process_file(uploaded_file):
+                ext = Path(uploaded_file.name).suffix.lower()
+                try:
+                    if ext == ".csv":
+                        return {"Sheet1": pd.read_csv(uploaded_file)}
+                    elif ext == ".xlsx":
+                        return pd.read_excel(uploaded_file, sheet_name=None)
+                    elif ext == ".parquet":
+                        return {"Sheet1": pd.read_parquet(uploaded_file)}
+                except Exception as e:
+                    st.error(f"Error processing file: {e}")
+                    return None
+            data = process_file(uploaded_file)
+            if data is not None:
+                sheet_names = list(data.keys())
+                sheet_selected = st.selectbox("Select Sheet", sheet_names)
+                df = data[sheet_selected]
+                st.session_state.df = df.copy()
+                st.success("Data uploaded successfully!")
+        else:
+            st.info("Please upload a file.")
+    elif choice == "Settings":
+        st.header("Settings")
+        dark_mode = st.checkbox("Enable Dark Mode", value=False)
+        if dark_mode:
+            st.markdown("""
+            <style>
+              body { background: #1e1e1e; color: #ccc; }
+              .card { background-color: #333; color: #eee; }
+            </style>
+            """, unsafe_allow_html=True)
 
-# -------------------------------------------------------------------
-# Sidebar: Upload Primary Data (Secondary data merge removed)
-# -------------------------------------------------------------------
-st.sidebar.header("Upload Primary Data")
-uploaded_file = st.sidebar.file_uploader("Choose CSV, Excel, or Parquet", type=["csv", "xlsx", "parquet"])
-if uploaded_file:
-    data = process_file(uploaded_file)
-    if data is None:
-        st.stop()
-    sheet_names = list(data.keys())
-    sheet_selected = st.sidebar.selectbox("Select Sheet", sheet_names)
-    df = data[sheet_selected]
-else:
-    st.info("Please upload a primary data file.")
+# If data is not yet uploaded, stop.
+if "df" not in st.session_state:
     st.stop()
 
-# Store the uploaded data in session state so transformations persist.
-if "df" not in st.session_state:
-    st.session_state.df = df.copy()
-
-# For convenience, define a local reference that updates after transformations.
+# Use the uploaded data.
 df = st.session_state.df
 
 # -------------------------------------------------------------------
@@ -85,11 +107,12 @@ if "sql_history" not in st.session_state:
     st.session_state.sql_history = []
 
 # -------------------------------------------------------------------
-# Create Tabs for All Features (8 Tabs)
+# Main Tabs for Features
 # -------------------------------------------------------------------
 tabs = st.tabs([
     "Data Preview & Filtering",
     "Summary & Profiling",
+    "Data Profile",
     "Advanced Visualizations",
     "SQL Query Editor",
     "Data Lineage & Transformations",
@@ -98,14 +121,14 @@ tabs = st.tabs([
     "Custom Dashboard"
 ])
 
-# In every tab, update df from session_state so transformations persist.
+# Always update df from session state.
 df = st.session_state.df
 
 # -------------------------------------------------------------------
-# Tab 1: Data Preview & Advanced Filtering
+# Tab 1: Data Preview & Filtering
 # -------------------------------------------------------------------
 with tabs[0]:
-    st.header("Data Preview & Filtering")
+    st.markdown("<div class='header-title'>Data Preview & Filtering</div>", unsafe_allow_html=True)
     all_columns = df.columns.tolist()
     selected_columns = st.multiselect("Select columns to display", all_columns, default=all_columns)
     df_display = df[selected_columns] if selected_columns else df
@@ -137,7 +160,7 @@ with tabs[0]:
 # Tab 2: Summary & Profiling
 # -------------------------------------------------------------------
 with tabs[1]:
-    st.header("Summary & Profiling")
+    st.markdown("<div class='header-title'>Summary & Profiling</div>", unsafe_allow_html=True)
     st.write("**Data Shape:**", df.shape)
     st.write("**Data Types:**")
     st.dataframe(pd.DataFrame(df.dtypes, columns=["Type"]))
@@ -163,10 +186,20 @@ with tabs[1]:
     st.dataframe(pd.DataFrame(outlier_info, index=["Outlier Count"]).T)
 
 # -------------------------------------------------------------------
-# Tab 3: Advanced Visualizations
+# Tab 3: Data Profile (YData Profiling)
 # -------------------------------------------------------------------
 with tabs[2]:
-    st.header("Advanced Visualizations")
+    st.markdown("<div class='header-title'>Data Profile Report</div>", unsafe_allow_html=True)
+    if st.button("Generate Profile Report"):
+        profile = ProfileReport(df, explorative=True)
+        profile_html = profile.to_html()
+        components.html(profile_html, height=800, scrolling=True)
+
+# -------------------------------------------------------------------
+# Tab 4: Advanced Visualizations
+# -------------------------------------------------------------------
+with tabs[3]:
+    st.markdown("<div class='header-title'>Advanced Visualizations</div>", unsafe_allow_html=True)
     numeric_columns = df.select_dtypes(include=np.number).columns.tolist()
     categorical_columns = df.select_dtypes(include=["object", "category"]).columns.tolist()
     if numeric_columns:
@@ -224,29 +257,10 @@ with tabs[2]:
         st.write("No numeric data for correlation analysis.")
 
 # -------------------------------------------------------------------
-# Tab 4: SQL Query Editor
-# -------------------------------------------------------------------
-with tabs[3]:
-    st.header("SQL Query Editor")
-    st.write("Write an SQL query using `df` as the table name (e.g., SELECT * FROM df LIMIT 10):")
-    query = st_ace(language="sql", theme="monokai", key="sql_editor", height=200,
-                   placeholder="e.g., SELECT * FROM df LIMIT 10")
-    if st.button("Run SQL Query", key="run_sql"):
-        try:
-            result = sqldf(query, {"df": df})
-            st.session_state.sql_history.append(query)
-            st.write("Query Result:")
-            st.dataframe(result)
-        except Exception as e:
-            st.error(f"SQL Query Error: {e}")
-    if st.checkbox("Show Query History"):
-        st.write(st.session_state.sql_history)
-
-# -------------------------------------------------------------------
 # Tab 5: Data Lineage & Transformations
 # -------------------------------------------------------------------
 with tabs[4]:
-    st.header("Data Lineage & Transformations")
+    st.markdown("<div class='header-title'>Data Lineage & Transformations</div>", unsafe_allow_html=True)
     st.write("Log your transformation steps and preview the updated data.")
     with st.form("lineage_form"):
         trans_type = st.selectbox("Transformation Type", ["Rename", "Create Derived Column", "Drop Column"], key="trans_type")
@@ -254,10 +268,17 @@ with tabs[4]:
             source = st.selectbox("Select Column", df.columns.tolist(), key="lineage_source")
             formula = None
         else:
-            st.write("Enter a formula using existing column names (e.g., col1 + col2 * 2):")
-            formula = st_ace(language="python", theme="monokai", key="calc_formula", height=100,
-                             placeholder="e.g., col1 + col2 * 2")
+            st.write("Enter a formula using existing column names (e.g., col1 + col2 * 2).")
+            formula = st_ace(
+                language="python",
+                theme="monokai",
+                key="calc_formula",
+                height=100,
+                placeholder="e.g., col1 + col2 * 2",
+                options={"enableBasicAutocompletion": True, "enableLiveAutocompletion": True}
+            )
             source = None
+            st.markdown("<div class='field-list'><strong>Available fields:</strong> " + ", ".join(df.columns.tolist()) + "</div>", unsafe_allow_html=True)
         target = st.text_input("New Column Name", key="lineage_target")
         submitted = st.form_submit_button("Add Transformation")
         if submitted:
@@ -279,7 +300,6 @@ with tabs[4]:
                 step = {"type": trans_type, "source": source if source else formula, "target": target}
                 st.session_state.lineage_steps.append(step)
                 st.success(f"Transformation applied: {trans_type} → {target}")
-    # Update local df after transformation
     df = st.session_state.df
     if st.session_state.lineage_steps:
         st.write("**Transformation Log:**")
@@ -292,7 +312,6 @@ with tabs[4]:
         dot.node(col, col)
     for step in st.session_state.lineage_steps:
         if step["type"] in ["Rename", "Create Derived Column"]:
-            # For "Rename", source is a column name; for derived column, source is the formula.
             src_label = step["source"] if isinstance(step["source"], str) else ", ".join(step["source"])
             dot.edge(src_label, step["target"], label=step["type"])
         elif step["type"] == "Drop Column":
@@ -315,7 +334,7 @@ with tabs[4]:
 # Tab 6: Pivot Table Builder
 # -------------------------------------------------------------------
 with tabs[5]:
-    st.header("Pivot Table Builder")
+    st.markdown("<div class='header-title'>Pivot Table Builder</div>", unsafe_allow_html=True)
     available_cols = df.columns.tolist()
     index_col = st.selectbox("Select Index (rows)", available_cols, key="pivot_index")
     col_col = st.selectbox("Select Column (optional)", [None] + available_cols, key="pivot_columns")
@@ -340,7 +359,7 @@ with tabs[5]:
 # Tab 7: Advanced Analytics
 # -------------------------------------------------------------------
 with tabs[6]:
-    st.header("Advanced Analytics")
+    st.markdown("<div class='header-title'>Advanced Analytics</div>", unsafe_allow_html=True)
     st.subheader("Anomaly Detection (IQR Method)")
     anomaly_results = {}
     for col in df.select_dtypes(include=np.number).columns:
@@ -372,7 +391,7 @@ with tabs[6]:
 # Tab 8: Custom Dashboard
 # -------------------------------------------------------------------
 with tabs[7]:
-    st.header("Custom Dashboard")
+    st.markdown("<div class='header-title'>Custom Dashboard</div>", unsafe_allow_html=True)
     st.write("Build custom metric cards for key statistics.")
     metric_options = ["Mean", "Median", "Standard Deviation", "Count", "Min", "Max"]
     selected_metric = st.selectbox("Select Metric", metric_options, key="dash_metric")
