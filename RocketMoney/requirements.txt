@@ -6,3 +6,6 @@ pandasql
 streamlit-ace
 openpyxl
 graphviz
+pyarrow
+scipy
+altair
