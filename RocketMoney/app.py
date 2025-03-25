@@ -3,21 +3,24 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from pathlib import Path
-from st_aggrid import AgGrid, GridOptionsBuilder
+
+# Try importing st_aggrid; if not available, use a fallback.
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder
+    use_aggrid = True
+except ImportError:
+    use_aggrid = False
+
 from streamlit_ace import st_ace
 from pandasql import sqldf
 
-# Set page configuration and apply custom CSS styling for a modern look
+# Set page configuration and custom styling
 st.set_page_config(page_title="Advanced Data Analyzer", layout="wide")
 st.markdown(
     """
     <style>
-    .reportview-container {
-        background: #f0f2f6;
-    }
-    .sidebar .sidebar-content {
-        background: #f9fafc;
-    }
+    .reportview-container { background: #f0f2f6; }
+    .sidebar .sidebar-content { background: #f9fafc; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -30,7 +33,6 @@ def process_file(uploaded_file):
         if ext == ".csv":
             return {"Sheet1": pd.read_csv(uploaded_file)}
         elif ext == ".xlsx":
-            # Read all sheets from the Excel file
             return pd.read_excel(uploaded_file, sheet_name=None)
         elif ext == ".parquet":
             return {"Sheet1": pd.read_parquet(uploaded_file)}
@@ -40,10 +42,7 @@ def process_file(uploaded_file):
 
 # Sidebar: File uploader and sheet selector
 st.sidebar.header("Upload Data")
-uploaded_file = st.sidebar.file_uploader(
-    "Choose a CSV, Excel, or Parquet file", type=["csv", "xlsx", "parquet"]
-)
-
+uploaded_file = st.sidebar.file_uploader("Choose a CSV, Excel, or Parquet file", type=["csv", "xlsx", "parquet"])
 if uploaded_file:
     data = process_file(uploaded_file)
     if data is None:
@@ -56,25 +55,25 @@ else:
     st.stop()
 
 # Create tabs for different functionalities
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Data Explorer", "Visualization", "SQL Query", "Data Tools"]
-)
+tab1, tab2, tab3, tab4 = st.tabs(["Data Explorer", "Visualization", "SQL Query", "Data Tools"])
 
 # --- Tab 1: Data Explorer ---
 with tab1:
     st.subheader("Data Explorer")
-    st.write("Interactively preview your dataset using AgGrid.")
-    gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
-    gb.configure_side_bar()
-    grid_options = gb.build()
-    AgGrid(df, gridOptions=grid_options, height=500, theme="streamlit")
+    st.write("Preview your dataset.")
+    if use_aggrid:
+        gb = GridOptionsBuilder.from_dataframe(df)
+        gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
+        gb.configure_side_bar()
+        grid_options = gb.build()
+        AgGrid(df, gridOptions=grid_options, height=500, theme="streamlit")
+    else:
+        st.dataframe(df)
 
 # --- Tab 2: Visualization ---
 with tab2:
     st.subheader("Visualization")
     st.write("Create interactive charts with Plotly.")
-    # Use only numeric columns for visualization
     numeric_columns = df.select_dtypes(include=np.number).columns.tolist()
     if numeric_columns:
         col1, col2 = st.columns(2)
@@ -114,7 +113,6 @@ with tab3:
     )
     if st.button("Run Query"):
         try:
-            # Use pandasql to run SQL queries on the DataFrame
             result = sqldf(query, {"df": df})
             st.write("Query Result:")
             st.dataframe(result)
@@ -127,7 +125,6 @@ with tab4:
     st.write("Perform basic data cleaning and export the cleaned dataset.")
     if st.button("Clean Data"):
         df_clean = df.copy()
-        # Drop columns with all missing values and fill numeric columns with their mean
         df_clean = df_clean.dropna(axis=1, how="all")
         num_cols = df_clean.select_dtypes(include=np.number).columns
         for col in num_cols:
