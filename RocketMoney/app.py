@@ -91,6 +91,7 @@ with st.sidebar:
             </style>
             """, unsafe_allow_html=True)
 
+# If data not in session state, stop.
 if "df" not in st.session_state:
     st.stop()
 
@@ -127,24 +128,48 @@ df = st.session_state.df
 # -------------------------------------------------------------------
 with tabs[0]:
     st.markdown("<div class='header-title'>Data Preview & Filtering</div>", unsafe_allow_html=True)
-    all_columns = df.columns.tolist()
+    # Reset index so we don't have a "row id" column in the display
+    df_display = df.reset_index(drop=True).copy()
+    
+    # Let user pick columns to display
+    all_columns = df_display.columns.tolist()
     selected_columns = st.multiselect("Select columns to display", all_columns, default=all_columns)
-    df_display = df[selected_columns] if selected_columns else df
+    df_display = df_display[selected_columns] if selected_columns else df_display
+    
+    # Filters (no st.form, so changes happen immediately)
     with st.expander("Add Filters"):
         for col in df_display.columns:
-            if pd.api.types.is_numeric_dtype(df_display[col]):
-                min_val, max_val = float(df_display[col].min()), float(df_display[col].max())
-                condition = st.slider(f"Filter {col}", min_val, max_val, (min_val, max_val))
-                df_display = df_display[(df_display[col] >= condition[0]) & (df_display[col] <= condition[1])]
-            elif pd.api.types.is_string_dtype(df_display[col]):
-                unique_vals = df_display[col].dropna().unique().tolist()
+            col_data = df_display[col]
+            # Numeric filter
+            if pd.api.types.is_numeric_dtype(col_data):
+                min_val, max_val = float(col_data.min()), float(col_data.max())
+                filter_vals = st.slider(
+                    f"Filter {col}", 
+                    min_val, 
+                    max_val, 
+                    (min_val, max_val)
+                )
+                df_display = df_display[
+                    (df_display[col] >= filter_vals[0]) &
+                    (df_display[col] <= filter_vals[1])
+                ]
+            # Categorical filter
+            elif pd.api.types.is_string_dtype(col_data) or pd.api.types.is_object_dtype(col_data):
+                unique_vals = col_data.dropna().unique().tolist()
                 if unique_vals:
-                    condition = st.multiselect(f"Filter {col}", unique_vals, default=unique_vals)
-                    df_display = df_display[df_display[col].isin(condition)]
+                    filter_list = st.multiselect(f"Filter {col}", unique_vals, default=unique_vals)
+                    df_display = df_display[df_display[col].isin(filter_list)]
+    
+    # Search
     search_query = st.text_input("Search (in displayed columns)")
     if search_query:
-        mask = df_display.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)
+        mask = df_display.apply(
+            lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), 
+            axis=1
+        )
         df_display = df_display[mask]
+    
+    # Show the filtered data
     if use_aggrid:
         gb = GridOptionsBuilder.from_dataframe(df_display)
         gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
@@ -164,15 +189,18 @@ with tabs[1]:
     st.dataframe(pd.DataFrame(df.dtypes, columns=["Type"]))
     st.write("**Summary Statistics:**")
     st.dataframe(df.describe(include='all').T)
+    
     st.write("**Missing Values:**")
     missing = df.isnull().sum()
     missing = missing[missing > 0]
     if not missing.empty:
-        fig_missing = px.bar(x=missing.index, y=missing.values, labels={'x':"Column", 'y':"Missing Count"},
-                              title="Missing Values Count")
+        fig_missing = px.bar(x=missing.index, y=missing.values, 
+                             labels={'x':"Column", 'y':"Missing Count"},
+                             title="Missing Values Count")
         st.plotly_chart(fig_missing, use_container_width=True)
     else:
         st.write("No missing values detected.")
+    
     st.subheader("Outlier Detection (IQR Method)")
     outlier_info = {}
     for col in df.select_dtypes(include=np.number).columns:
@@ -200,6 +228,7 @@ with tabs[3]:
     st.markdown("<div class='header-title'>Advanced Visualizations</div>", unsafe_allow_html=True)
     numeric_columns = df.select_dtypes(include=np.number).columns.tolist()
     categorical_columns = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    
     if numeric_columns:
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -208,9 +237,16 @@ with tabs[3]:
             y_axis = st.selectbox("Y-Axis", numeric_columns, key="viz_y")
         with col3:
             color_option = st.selectbox("Color By (optional)", [None] + categorical_columns, key="viz_color")
-        chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Bar", "Histogram", "Box", "Violin"], key="chart_type")
+        
+        chart_type = st.selectbox(
+            "Chart Type", 
+            ["Scatter", "Line", "Bar", "Histogram", "Box", "Violin"], 
+            key="chart_type"
+        )
+        
         facet_row = st.selectbox("Facet Row (optional)", [None] + categorical_columns, key="facet_row")
         facet_col = st.selectbox("Facet Column (optional)", [None] + categorical_columns, key="facet_col")
+        
         if st.button("Generate Chart", key="gen_chart"):
             try:
                 if chart_type == "Scatter":
@@ -232,22 +268,26 @@ with tabs[3]:
                     fig = px.violin(df, x=x_axis, y=y_axis, color=color_option,
                                     box=True, points="all",
                                     facet_row=facet_row, facet_col=facet_col)
+                
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Error creating chart: {e}")
     else:
         st.write("Not enough numeric columns available for visualization.")
+    
     st.subheader("Interactive Correlation Matrix")
     num_df = df.select_dtypes(include=np.number)
     if not num_df.empty:
         corr = num_df.corr()
         fig_corr = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation Matrix")
         st.plotly_chart(fig_corr, use_container_width=True)
+        
         col_pair = st.columns(2)
         with col_pair[0]:
             var1 = st.selectbox("Variable 1", numeric_columns, key="corr_var1")
         with col_pair[1]:
             var2 = st.selectbox("Variable 2", numeric_columns, key="corr_var2")
+        
         if st.button("Show Scatter for Selected Variables"):
             scatter_fig = px.scatter(df, x=var1, y=var2)
             st.plotly_chart(scatter_fig, use_container_width=True)
@@ -260,8 +300,11 @@ with tabs[3]:
 with tabs[4]:
     st.markdown("<div class='header-title'>Data Lineage & Transformations</div>", unsafe_allow_html=True)
     st.write("Log your transformation steps and preview the updated data.")
+    
+    # Use a form so the user must explicitly click the button to apply transformations.
     with st.form("lineage_form"):
         trans_type = st.selectbox("Transformation Type", ["Rename", "Create Derived Column", "Drop Column"], key="trans_type")
+        
         if trans_type in ["Rename", "Drop Column"]:
             source = st.selectbox("Select Column", df.columns.tolist(), key="lineage_source")
             formula = None
@@ -276,15 +319,27 @@ with tabs[4]:
                 options={"enableBasicAutocompletion": True, "enableLiveAutocompletion": True}
             )
             source = None
-            st.markdown("<div class='field-list'><strong>Available fields:</strong> " + ", ".join(df.columns.tolist()) + "</div>", unsafe_allow_html=True)
+            
+            # Show available fields as a reference
+            st.markdown(
+                "<div class='field-list'><strong>Available fields:</strong> " 
+                + ", ".join(df.columns.tolist()) 
+                + "</div>", 
+                unsafe_allow_html=True
+            )
+        
         target = st.text_input("New Column Name", key="lineage_target")
+        
+        # This is the key to avoid "Missing Submit Button" warnings
         submitted = st.form_submit_button("Add Transformation")
+        
         if submitted:
             if not target:
                 st.error("Please provide a target column name.")
-            elif trans_type == "Create Derived Column" and not formula.strip():
+            elif trans_type == "Create Derived Column" and (not formula or not formula.strip()):
                 st.error("Please provide a formula for the derived column.")
             else:
+                # Apply the transformation
                 if trans_type == "Rename":
                     st.session_state.df = st.session_state.df.rename(columns={source: target})
                 elif trans_type == "Drop Column":
@@ -295,33 +350,48 @@ with tabs[4]:
                     except Exception as e:
                         st.error(f"Error computing derived column: {e}")
                         st.stop()
-                step = {"type": trans_type, "source": source if source else formula, "target": target}
+                
+                step = {
+                    "type": trans_type,
+                    "source": source if source else formula,
+                    "target": target
+                }
                 st.session_state.lineage_steps.append(step)
                 st.success(f"Transformation applied: {trans_type} → {target}")
+    
+    # Update df after transformations
     df = st.session_state.df
+    
+    # Show transformation log
     if st.session_state.lineage_steps:
         st.write("**Transformation Log:**")
         st.dataframe(pd.DataFrame(st.session_state.lineage_steps))
+    
     if st.button("Clear All Lineage Steps"):
         st.session_state.lineage_steps = []
         st.success("Lineage steps cleared.")
+    
+    # Build a lineage graph
     dot = graphviz.Digraph()
     for col in df.columns:
         dot.node(col, col)
     for step in st.session_state.lineage_steps:
         if step["type"] in ["Rename", "Create Derived Column"]:
-            src_label = step["source"] if isinstance(step["source"], str) else ", ".join(step["source"])
-            dot.edge(src_label, step["target"], label=step["type"])
+            dot.edge(step["source"], step["target"], label=step["type"])
         elif step["type"] == "Drop Column":
             dot.node(step["target"], step["target"], style="filled", fillcolor="red")
             dot.edge(step["target"], "Dropped", label="Dropped")
     dot.node("Dropped", "Dropped", style="filled", fillcolor="lightgray")
+    
     st.subheader("Lineage Graph")
     st.graphviz_chart(dot)
+    
     st.subheader("Preview & Download Updated Data")
-    st.dataframe(df)
+    st.dataframe(df.reset_index(drop=True))
+    
     csv_data = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", data=csv_data, file_name="updated_data.csv", mime="text/csv")
+    
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("updated_data.csv", csv_data)
@@ -337,18 +407,31 @@ with tabs[5]:
     index_col = st.selectbox("Select Index (rows)", available_cols, key="pivot_index")
     col_col = st.selectbox("Select Column (optional)", [None] + available_cols, key="pivot_columns")
     num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    
     if not num_cols:
         st.write("No numeric columns available for pivot table values.")
     else:
         value_col = st.selectbox("Select Value Column (numeric)", num_cols, key="pivot_value")
         agg_func = st.selectbox("Aggregation Function", ["sum", "mean", "count", "min", "max"], key="pivot_agg")
+        
         if st.button("Generate Pivot Table", key="gen_pivot"):
             try:
-                pivot = pd.pivot_table(df, index=index_col, columns=col_col if col_col else None,
-                                       values=value_col, aggfunc=agg_func)
+                pivot = pd.pivot_table(
+                    df, 
+                    index=index_col, 
+                    columns=col_col if col_col else None,
+                    values=value_col, 
+                    aggfunc=agg_func
+                )
                 st.dataframe(pivot)
+                
                 if np.issubdtype(pivot.values.dtype, np.number):
-                    fig_pivot = px.imshow(pivot, text_auto=True, aspect="auto", title="Pivot Table Heatmap")
+                    fig_pivot = px.imshow(
+                        pivot, 
+                        text_auto=True, 
+                        aspect="auto", 
+                        title="Pivot Table Heatmap"
+                    )
                     st.plotly_chart(fig_pivot, use_container_width=True)
             except Exception as e:
                 st.error(f"Error creating pivot table: {e}")
@@ -364,23 +447,32 @@ with tabs[6]:
         Q1 = df[col].quantile(0.25)
         Q3 = df[col].quantile(0.75)
         IQR = Q3 - Q1
-        lower_bound, upper_bound = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
         anomalies = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
         anomaly_results[col] = anomalies.shape[0]
     st.dataframe(pd.DataFrame(anomaly_results, index=["Anomaly Count"]).T)
+    
     st.subheader("Correlation Heatmap")
     num_df = df.select_dtypes(include=np.number)
     if not num_df.empty:
         corr = num_df.corr()
-        fig_corr = go.Figure(data=go.Heatmap(z=corr.values,
-                                              x=corr.columns,
-                                              y=corr.index,
-                                              colorscale="Viridis",
-                                              zmin=-1, zmax=1,
-                                              colorbar=dict(title="Correlation")))
-        fig_corr.update_layout(title="Correlation Heatmap",
-                               xaxis_title="Features",
-                               yaxis_title="Features")
+        fig_corr = go.Figure(
+            data=go.Heatmap(
+                z=corr.values,
+                x=corr.columns,
+                y=corr.index,
+                colorscale="Viridis",
+                zmin=-1,
+                zmax=1,
+                colorbar=dict(title="Correlation")
+            )
+        )
+        fig_corr.update_layout(
+            title="Correlation Heatmap",
+            xaxis_title="Features",
+            yaxis_title="Features"
+        )
         st.plotly_chart(fig_corr, use_container_width=True)
     else:
         st.write("No numeric columns available for correlation analysis.")
@@ -391,11 +483,14 @@ with tabs[6]:
 with tabs[7]:
     st.markdown("<div class='header-title'>Custom Dashboard</div>", unsafe_allow_html=True)
     st.write("Build custom metric cards for key statistics.")
+    
     metric_options = ["Mean", "Median", "Standard Deviation", "Count", "Min", "Max"]
     selected_metric = st.selectbox("Select Metric", metric_options, key="dash_metric")
     numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    
     if numeric_cols:
         column_to_analyze = st.selectbox("Select Column", numeric_cols, key="dash_column")
+        
         if st.button("Show Metric Card", key="show_metric"):
             if column_to_analyze:
                 if selected_metric == "Mean":
@@ -410,6 +505,7 @@ with tabs[7]:
                     value = df[column_to_analyze].min()
                 elif selected_metric == "Max":
                     value = df[column_to_analyze].max()
+                
                 st.markdown(f"""
                 <div class="card">
                     <h3>{selected_metric} of {column_to_analyze}</h3>
