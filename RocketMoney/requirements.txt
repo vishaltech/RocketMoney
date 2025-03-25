@@ -2,14 +2,7 @@ streamlit
 pandas
 numpy
 plotly
-pandasql
 streamlit-ace
 openpyxl
 graphviz
 pyarrow
-scipy
-altair
-streamlit-option-menu
-streamlit-tags
-ydata-profiling
-setuptools
