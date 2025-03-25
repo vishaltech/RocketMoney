@@ -7,6 +7,8 @@ from pathlib import Path
 import graphviz
 from streamlit_ace import st_ace
 from pandasql import sqldf
+from io import BytesIO
+import zipfile
 
 # Optional interactive grid: if not available, fall back to st.dataframe.
 try:
@@ -67,11 +69,11 @@ else:
     st.info("Please upload a primary data file.")
     st.stop()
 
-# Store the uploaded data in session state (so transformations persist)
+# Store the uploaded data in session state so transformations persist.
 if "df" not in st.session_state:
-    st.session_state.df = df
+    st.session_state.df = df.copy()
 
-# For convenience, define a local reference (will update after transformations)
+# For convenience, define a local reference that updates after transformations.
 df = st.session_state.df
 
 # -------------------------------------------------------------------
@@ -96,7 +98,7 @@ tabs = st.tabs([
     "Custom Dashboard"
 ])
 
-# In every tab, update df from session_state so transformations persist
+# In every tab, update df from session_state so transformations persist.
 df = st.session_state.df
 
 # -------------------------------------------------------------------
@@ -245,19 +247,17 @@ with tabs[3]:
 # -------------------------------------------------------------------
 with tabs[4]:
     st.header("Data Lineage & Transformations")
-    st.write("Log your column transformation steps and visualize the lineage.")
-    # Transformation form with enhanced derived column editor
+    st.write("Log your transformation steps and preview the updated data.")
     with st.form("lineage_form"):
         trans_type = st.selectbox("Transformation Type", ["Rename", "Create Derived Column", "Drop Column"], key="trans_type")
         if trans_type in ["Rename", "Drop Column"]:
             source = st.selectbox("Select Column", df.columns.tolist(), key="lineage_source")
-            formula = None  # Not used in these cases.
+            formula = None
         else:
-            # For derived column, show a small ACE editor to let the user type a formula.
             st.write("Enter a formula using existing column names (e.g., col1 + col2 * 2):")
             formula = st_ace(language="python", theme="monokai", key="calc_formula", height=100,
                              placeholder="e.g., col1 + col2 * 2")
-            source = None  # Not used here.
+            source = None
         target = st.text_input("New Column Name", key="lineage_target")
         submitted = st.form_submit_button("Add Transformation")
         if submitted:
@@ -266,45 +266,50 @@ with tabs[4]:
             elif trans_type == "Create Derived Column" and not formula.strip():
                 st.error("Please provide a formula for the derived column.")
             else:
-                # Apply transformation immediately to st.session_state.df
                 if trans_type == "Rename":
                     st.session_state.df = st.session_state.df.rename(columns={source: target})
                 elif trans_type == "Drop Column":
                     st.session_state.df = st.session_state.df.drop(columns=[source])
                 elif trans_type == "Create Derived Column":
                     try:
-                        # Use df.eval to compute the new column; user must use valid Python expression.
                         st.session_state.df[target] = st.session_state.df.eval(formula)
                     except Exception as e:
                         st.error(f"Error computing derived column: {e}")
                         st.stop()
-                # Log the transformation step (include formula if applicable)
                 step = {"type": trans_type, "source": source if source else formula, "target": target}
                 st.session_state.lineage_steps.append(step)
                 st.success(f"Transformation applied: {trans_type} → {target}")
     # Update local df after transformation
     df = st.session_state.df
-    # Display current lineage steps
     if st.session_state.lineage_steps:
         st.write("**Transformation Log:**")
-        for i, step in enumerate(st.session_state.lineage_steps, 1):
-            st.write(f"{i}. {step['type']}: {step['source']} → {step['target']}")
+        st.dataframe(pd.DataFrame(st.session_state.lineage_steps))
     if st.button("Clear All Lineage Steps"):
         st.session_state.lineage_steps = []
         st.success("Lineage steps cleared.")
-    # Build lineage graph using Graphviz
     dot = graphviz.Digraph()
     for col in df.columns:
         dot.node(col, col)
     for step in st.session_state.lineage_steps:
         if step["type"] in ["Rename", "Create Derived Column"]:
-            dot.edge(step["source"] if step["type"]=="Rename" else step["source"], step["target"], label=step["type"])
+            # For "Rename", source is a column name; for derived column, source is the formula.
+            src_label = step["source"] if isinstance(step["source"], str) else ", ".join(step["source"])
+            dot.edge(src_label, step["target"], label=step["type"])
         elif step["type"] == "Drop Column":
             dot.node(step["target"], step["target"], style="filled", fillcolor="red")
             dot.edge(step["target"], "Dropped", label="Dropped")
     dot.node("Dropped", "Dropped", style="filled", fillcolor="lightgray")
     st.subheader("Lineage Graph")
     st.graphviz_chart(dot)
+    st.subheader("Preview & Download Updated Data")
+    st.dataframe(df)
+    csv_data = df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", data=csv_data, file_name="updated_data.csv", mime="text/csv")
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("updated_data.csv", csv_data)
+    zip_buffer.seek(0)
+    st.download_button("Download Compressed ZIP", data=zip_buffer, file_name="updated_data.zip", mime="application/zip")
 
 # -------------------------------------------------------------------
 # Tab 6: Pivot Table Builder
