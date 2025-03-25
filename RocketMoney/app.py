@@ -91,11 +91,9 @@ with st.sidebar:
             </style>
             """, unsafe_allow_html=True)
 
-# If data is not yet uploaded, stop.
 if "df" not in st.session_state:
     st.stop()
 
-# Use the uploaded data.
 df = st.session_state.df
 
 # -------------------------------------------------------------------
@@ -186,7 +184,7 @@ with tabs[1]:
     st.dataframe(pd.DataFrame(outlier_info, index=["Outlier Count"]).T)
 
 # -------------------------------------------------------------------
-# Tab 3: Data Profile (YData Profiling)
+# Tab 3: Data Profile Report
 # -------------------------------------------------------------------
 with tabs[2]:
     st.markdown("<div class='header-title'>Data Profile Report</div>", unsafe_allow_html=True)
