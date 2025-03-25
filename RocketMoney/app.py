@@ -1,263 +1,178 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-import json
-from collections import deque
-import time
-import re
-import os
-import subprocess
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import duckdb
+import sqlparse
+import tempfile
+import hashlib
+import openai
+from pathlib import Path
+from st_aggrid import AgGrid, GridOptionsBuilder
+from streamlit_ace import st_ace
+from cryptography.fernet import Fernet
+from io import BytesIO
+from pandas.api.types import is_datetime64_any_dtype
 
-# Import Playwright’s sync API
-from playwright.sync_api import sync_playwright
+# Configuration
+openai.api_key = st.secrets["OPENAI_KEY"]
+ENCRYPTION_KEY = Fernet.generate_key()
+MAX_FILE_SIZE_MB = 500
+ALLOWED_EXTENSIONS = ['csv', 'xlsx', 'parquet', 'feather']
 
-# =============================================================================
-# Helper: Ensure Playwright Browsers Are Installed
-# =============================================================================
-def ensure_playwright_browsers_installed():
-    """
-    Check if Playwright’s Chromium browser executable exists.
-    If not, run 'playwright install' to download the necessary browsers.
-    """
-    # Typically, Playwright caches its browsers in ~/.cache/ms-playwright
-    cache_dir = os.path.expanduser("~/.cache/ms-playwright")
-    if not os.path.exists(cache_dir):
-        st.info("Playwright browsers not found. Installing now...")
-        try:
-            subprocess.run(["playwright", "install"], check=True)
-        except Exception as e:
-            st.error(f"Error during Playwright browser installation: {e}")
+st.set_page_config(layout="wide", page_title="QuantumAnalyzer Pro", page_icon="🚀")
 
-# =============================================================================
-# Helper: Fetch Functions (Static & Dynamic)
-# =============================================================================
-def fetch_static(url, headers=None):
-    """Fetch a page using requests (static). Returns raw HTML."""
-    if headers is None:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/58.0.3029.110 Safari/537.3"
-            )
-        }
-    resp = requests.get(url, headers=headers, timeout=10)
-    resp.raise_for_status()
-    return resp.text
+# Security Layer
+def encrypt_data(data):
+    fernet = Fernet(ENCRYPTION_KEY)
+    return fernet.encrypt(data)
 
-def fetch_dynamic(url, wait_time=3):
-    """
-    Fetch a page using Playwright (dynamic).
-    Automatically ensures browsers are installed.
-    wait_time: seconds to wait for JavaScript to load.
-    Returns raw HTML.
-    """
-    ensure_playwright_browsers_installed()
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        # Navigate to the URL (15-second timeout)
-        page.goto(url, timeout=15000)
-        page.wait_for_timeout(wait_time * 1000)  # wait_time in milliseconds
-        html = page.content()
-        browser.close()
-        return html
+def decrypt_data(data):
+    fernet = Fernet(ENCRYPTION_KEY)
+    return fernet.decrypt(data)
 
-def parse_html(html):
-    """Convert an HTML string to a BeautifulSoup object."""
-    return BeautifulSoup(html, "html.parser")
+# AI Integration
+def generate_query_suggestion(schema):
+    prompt = f"Generate 3 advanced SQL queries based on this schema: {schema}"
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
 
-# =============================================================================
-# Helper: Extract Key Table Data from the Page
-# =============================================================================
-def extract_key_table(soup):
-    """
-    Find all table elements in the page and return the one with the most rows.
-    The table is returned as a dictionary containing headers and rows.
-    """
-    tables = soup.find_all("table")
-    key_table = None
-    max_rows = 0
-    for table in tables:
-        tbody = table.find("tbody")
-        if tbody:
-            rows = tbody.find_all("tr")
-            if len(rows) > max_rows:
-                max_rows = len(rows)
-                key_table = table
-    if key_table:
-        # Attempt to extract headers from <thead>; fallback to first row if missing.
-        headers = []
-        thead = key_table.find("thead")
-        if thead:
-            headers = [th.get_text(strip=True) for th in thead.find_all("th")]
-        else:
-            first_row = key_table.find("tr")
-            if first_row:
-                headers = [cell.get_text(strip=True) for cell in first_row.find_all(["td", "th"])]
-
-        # Extract row data from <tbody>; if missing, use all rows.
-        data_rows = []
-        tbody = key_table.find("tbody")
-        rows = tbody.find_all("tr") if tbody else key_table.find_all("tr")
-        for row in rows:
-            cells = row.find_all(["td", "th"])
-            cell_texts = [cell.get_text(strip=True) for cell in cells]
-            if headers and len(cell_texts) == len(headers):
-                data_rows.append(dict(zip(headers, cell_texts)))
-            else:
-                data_rows.append(cell_texts)
-        return {"headers": headers, "rows": data_rows}
+# Data Processing
+def process_file(uploaded_file):
+    file_ext = Path(uploaded_file.name).suffix[1:].lower()
+    
+    if file_ext == 'csv':
+        return {'Sheet1': pd.read_csv(uploaded_file)}
+    elif file_ext == 'parquet':
+        return {'Sheet1': pd.read_parquet(uploaded_file)}
+    elif file_ext == 'xlsx':
+        return pd.read_excel(uploaded_file, sheet_name=None)
     return None
 
-# =============================================================================
-# Helper: Extract Data from a Page
-# =============================================================================
-def extract_data(url, html):
-    """
-    Extract various data from a page:
-      - Title, headings, meta tags, images, links, and (if present) key table data.
-    Returns a dictionary of the extracted data.
-    """
-    soup = parse_html(html)
-    data = {}
+# Advanced Visualization
+def create_interactive_viz(df):
+    col1, col2 = st.columns(2)
+    with col1:
+        x_axis = st.selectbox('X Axis', df.columns)
+        y_axis = st.selectbox('Y Axis', df.columns)
+        chart_type = st.selectbox('Chart Type', 
+            ['3D Scatter', 'Heatmap', 'Parallel Categories', 'Sunburst'])
+    
+    with col2:
+        color = st.selectbox('Color Encoding', [None] + list(df.columns))
+        animation = st.selectbox('Animation Frame', [None] + list(df.columns))
+    
+    if chart_type == '3D Scatter':
+        fig = px.scatter_3d(df, x=x_axis, y=y_axis, z=color, 
+                          animation_frame=animation)
+    elif chart_type == 'Heatmap':
+        fig = px.density_heatmap(df, x=x_axis, y=y_axis, nbinsx=50, nbinsy=50)
+    elif chart_type == 'Parallel Categories':
+        fig = px.parallel_categories(df, dimensions=df.columns.tolist()[:5])
+    elif chart_type == 'Sunburst':
+        fig = px.sunburst(df, path=df.columns.tolist()[:3], values=y_axis)
+    
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Title
-    title_tag = soup.find("title")
-    data["title"] = title_tag.get_text(strip=True) if title_tag else None
+# SQL IDE Component
+def sql_ide(dataframes):
+    selected_sheet = st.selectbox("Select Dataset", list(dataframes.keys()))
+    df = dataframes[selected_sheet]
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("SQL Editor")
+        query = st_ace(
+            language='sql',
+            placeholder="SELECT * FROM df",
+            key="sql_editor",
+            height=300,
+            theme="dracula",
+            font_size=14,
+            wrap=True
+        )
+        
+        if st.button("▶ Execute Query"):
+            try:
+                result = duckdb.query(query).to_df()
+                st.session_state.last_result = result
+                st.success("Query executed successfully!")
+            except Exception as e:
+                st.error(f"Query Error: {str(e)}")
+    
+    with col2:
+        st.subheader("Data Preview")
+        AgGrid(df.head(1000), height=300, fit_columns_on_grid_load=True)
+        
+        if 'last_result' in st.session_state:
+            st.subheader("Query Result")
+            AgGrid(st.session_state.last_result, height=300)
 
-    # Headings (h1, h2, h3)
-    headings = []
-    for tag_name in ["h1", "h2", "h3"]:
-        for tag in soup.find_all(tag_name):
-            headings.append({"tag": tag_name, "text": tag.get_text(strip=True)})
-    data["headings"] = headings
-
-    # Meta tags
-    metas = []
-    for meta in soup.find_all("meta"):
-        metas.append(dict(meta.attrs))
-    data["meta_tags"] = metas
-
-    # Images
-    images = []
-    for img in soup.find_all("img"):
-        images.append({"src": img.get("src"), "alt": img.get("alt")})
-    data["images"] = images
-
-    # Links
-    links = []
-    for a in soup.find_all("a", href=True):
-        links.append({"href": a["href"].strip(), "text": a.get_text(strip=True)})
-    data["links"] = links
-
-    # Extract key table data (if any)
-    key_table = extract_key_table(soup)
-    if key_table:
-        data["key_table"] = key_table
-    else:
-        data["key_table"] = "No table data found"
-
-    # Include the original URL
-    data["url"] = url
-
-    return data
-
-# =============================================================================
-# BFS Crawler Function
-# =============================================================================
-def bfs_crawl(start_url, max_depth, max_pages, mode, wait_time):
-    """
-    Crawl the given start_url using a breadth-first search (BFS) approach.
-      - Only follows links within the same domain.
-      - Limits the crawl by max_depth and max_pages.
-      - mode: "static" (requests) or "dynamic" (Playwright).
-    Returns a list of dictionaries containing extracted data for each page.
-    """
-    domain = urlparse(start_url).netloc.lower()
-    visited = set()
-    queue = deque()
-    queue.append((start_url, 0))
-    visited.add(start_url)
-
-    results = []
-    pages_crawled = 0
-
-    progress_bar = st.progress(0)
-
-    while queue:
-        current_url, depth = queue.popleft()
-        if depth > max_depth:
-            break
-
-        try:
-            if mode == "dynamic":
-                html = fetch_dynamic(current_url, wait_time)
-            else:
-                html = fetch_static(current_url)
-        except Exception as e:
-            st.error(f"Failed to fetch {current_url}: {e}")
-            continue
-
-        page_data = extract_data(current_url, html)
-        results.append(page_data)
-        pages_crawled += 1
-
-        # Update progress bar (as a percentage)
-        progress_bar.progress(min(int((pages_crawled / max_pages) * 100), 100))
-
-        if pages_crawled >= max_pages:
-            break
-
-        # Parse links and add new ones from the same domain
-        soup = parse_html(html)
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"].strip()
-            next_link = urljoin(current_url, href)
-            next_domain = urlparse(next_link).netloc.lower()
-            if next_domain == domain and next_link not in visited:
-                visited.add(next_link)
-                queue.append((next_link, depth + 1))
-
-    return results
-
-# =============================================================================
-# Streamlit App UI
-# =============================================================================
+# Main App
 def main():
-    st.set_page_config(page_title="Ultra Advanced Web Scraper", layout="wide")
-    st.title("Ultra Advanced Web Scraper")
-
-    st.sidebar.header("Scraping Parameters")
-    start_url = st.sidebar.text_input("Start URL (e.g., https://stockanalysis.com/stocks/)")
-    max_depth = st.sidebar.number_input("Max Depth", min_value=0, max_value=10, value=1)
-    max_pages = st.sidebar.number_input("Max Pages", min_value=1, max_value=1000, value=5)
-    mode_choice = st.sidebar.selectbox("Scraping Mode", ["static", "dynamic"])
-    wait_time = st.sidebar.slider("Dynamic Wait (seconds)", 1, 10, 3)
-
-    if st.sidebar.button("Start Scraping"):
-        if not start_url:
-            st.error("Please provide a start URL.")
-        else:
-            with st.spinner("Crawling in progress..."):
-                results = bfs_crawl(start_url, max_depth, max_pages, mode_choice, wait_time)
-            st.success("Crawling Complete!")
-            st.subheader("Results (JSON)")
-
-            # Display each page’s data in an expander
-            for i, page in enumerate(results, 1):
-                with st.expander(f"Page {i}: {page.get('url', 'N/A')}"):
-                    st.json(page)
-
-            # Offer all results as a downloadable JSON file
-            json_data = json.dumps(results, indent=2)
-            st.download_button(
-                label="Download All Results as JSON",
-                data=json_data,
-                file_name="scraping_results.json",
-                mime="application/json"
-            )
+    st.title("🚀 QuantumAnalyzer Pro - Next-Gen Data Analysis Suite")
+    
+    uploaded_file = st.file_uploader("Upload Dataset", type=ALLOWED_EXTENSIONS, 
+                                   accept_multiple_files=False)
+    
+    if uploaded_file:
+        if uploaded_file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+            st.error(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit")
+            return
+            
+        data = process_file(uploaded_file)
+        if not data:
+            st.error("Unsupported file format")
+            return
+            
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Explorer", "⚡ SQL Lab", 
+                                        "📈 Visualize", "🔧 Utilities"])
+        
+        with tab1:
+            sheet_names = list(data.keys())
+            selected_sheet = st.selectbox("Select Sheet", sheet_names)
+            gb = GridOptionsBuilder.from_dataframe(data[selected_sheet])
+            gb.configure_pagination(enabled=True)
+            gb.configure_side_bar()
+            gb.configure_default_column(groupable=True, value=True, 
+                                      enableRowGroup=True, aggFunc='sum')
+            grid_options = gb.build()
+            AgGrid(data[selected_sheet], gridOptions=grid_options, 
+                 height=600, theme='streamlit')
+        
+        with tab2:
+            sql_ide(data)
+        
+        with tab3:
+            create_interactive_viz(data[selected_sheet])
+        
+        with tab4:
+            st.subheader("Advanced Tools")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("### Data Transformation")
+                if st.button("Auto-Clean Data"):
+                    # Advanced cleaning logic
+                    df = data[selected_sheet]
+                    df = df.dropna(axis=1, how='all')
+                    df = df.apply(lambda col: col.fillna(col.mean()) 
+                               if np.issubdtype(col.dtype, np.number) else col)
+                    st.success("Data cleaned automatically!")
+                
+                st.download_button("Export to Excel", data[selected_sheet].to_excel(),
+                                 file_name="exported_data.xlsx")
+            
+            with col2:
+                st.write("### AI Assistant")
+                if st.button("Generate Query Suggestions"):
+                    schema = str(data[selected_sheet].dtypes)
+                    suggestions = generate_query_suggestion(schema)
+                    st.markdown(f"```sql\n{suggestions}\n```")
 
 if __name__ == "__main__":
     main()
