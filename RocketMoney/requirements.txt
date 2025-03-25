@@ -6,3 +6,4 @@ pandasql
 streamlit-ace
 openpyxl
 graphviz
+pydrive2
