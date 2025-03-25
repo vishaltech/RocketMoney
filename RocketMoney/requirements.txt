@@ -2,7 +2,7 @@ streamlit
 pandas
 numpy
 plotly
-duckdb
+pandasql
 st-aggrid
 streamlit-ace
 openpyxl
