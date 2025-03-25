@@ -3,6 +3,5 @@ pandas
 numpy
 plotly
 pandasql
-st-aggrid
 streamlit-ace
 openpyxl
