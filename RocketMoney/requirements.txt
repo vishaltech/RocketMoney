@@ -9,3 +9,6 @@ graphviz
 pyarrow
 scipy
 altair
+streamlit-option-menu
+streamlit-tags
+ydata-profiling
