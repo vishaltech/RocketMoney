@@ -12,3 +12,4 @@ altair
 streamlit-option-menu
 streamlit-tags
 ydata-profiling
+setuptools
