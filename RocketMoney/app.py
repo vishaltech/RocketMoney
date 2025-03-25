@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import duckdb
 from pathlib import Path
 from st_aggrid import AgGrid, GridOptionsBuilder
 from streamlit_ace import st_ace
+from pandasql import sqldf
 
-# Set page configuration and apply some custom styling
+# Set page configuration and apply custom CSS styling for a modern look
 st.set_page_config(page_title="Advanced Data Analyzer", layout="wide")
 st.markdown(
     """
@@ -23,14 +23,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Helper function to process uploaded files
+# Function to process uploaded files
 def process_file(uploaded_file):
     ext = Path(uploaded_file.name).suffix.lower()
     try:
         if ext == ".csv":
             return {"Sheet1": pd.read_csv(uploaded_file)}
         elif ext == ".xlsx":
-            # Read all sheets if available
+            # Read all sheets from the Excel file
             return pd.read_excel(uploaded_file, sheet_name=None)
         elif ext == ".parquet":
             return {"Sheet1": pd.read_parquet(uploaded_file)}
@@ -38,7 +38,7 @@ def process_file(uploaded_file):
         st.error(f"Error processing file: {e}")
         return None
 
-# Sidebar: File upload and sheet selection
+# Sidebar: File uploader and sheet selector
 st.sidebar.header("Upload Data")
 uploaded_file = st.sidebar.file_uploader(
     "Choose a CSV, Excel, or Parquet file", type=["csv", "xlsx", "parquet"]
@@ -48,7 +48,6 @@ if uploaded_file:
     data = process_file(uploaded_file)
     if data is None:
         st.stop()
-    
     sheet_names = list(data.keys())
     sheet_selected = st.sidebar.selectbox("Select Sheet", sheet_names)
     df = data[sheet_selected]
@@ -64,7 +63,7 @@ tab1, tab2, tab3, tab4 = st.tabs(
 # --- Tab 1: Data Explorer ---
 with tab1:
     st.subheader("Data Explorer")
-    st.write("Preview the dataset using an interactive grid.")
+    st.write("Interactively preview your dataset using AgGrid.")
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_pagination(enabled=True, paginationAutoPageSize=True)
     gb.configure_side_bar()
@@ -74,16 +73,15 @@ with tab1:
 # --- Tab 2: Visualization ---
 with tab2:
     st.subheader("Visualization")
-    st.write("Create interactive charts using Plotly.")
-    # Use only numeric columns for visualizations
+    st.write("Create interactive charts with Plotly.")
+    # Use only numeric columns for visualization
     numeric_columns = df.select_dtypes(include=np.number).columns.tolist()
-    if len(numeric_columns) >= 1:
+    if numeric_columns:
         col1, col2 = st.columns(2)
         with col1:
             x_axis = st.selectbox("Select X-Axis", numeric_columns, key="viz_x")
         with col2:
-            # For histogram, only one numeric column is needed
-            y_axis = st.selectbox("Select Y-Axis (if applicable)", numeric_columns, key="viz_y")
+            y_axis = st.selectbox("Select Y-Axis", numeric_columns, key="viz_y")
         chart_type = st.selectbox("Chart Type", ["Scatter", "Line", "Bar", "Histogram", "Box"])
         if st.button("Generate Chart"):
             try:
@@ -116,7 +114,8 @@ with tab3:
     )
     if st.button("Run Query"):
         try:
-            result = duckdb.query(query, {"df": df}).to_df()
+            # Use pandasql to run SQL queries on the DataFrame
+            result = sqldf(query, {"df": df})
             st.write("Query Result:")
             st.dataframe(result)
         except Exception as e:
