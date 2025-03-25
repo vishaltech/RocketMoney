@@ -16,7 +16,7 @@ ALLOWED_EXTENSIONS = ['csv', 'xlsx', 'parquet']
 
 st.set_page_config(layout="wide", page_title="DataAnalyzer Pro", page_icon="🚀")
 
-# Security Layer
+# Security Layer (unused but kept for future use)
 ENCRYPTION_KEY = Fernet.generate_key()
 
 def encrypt_data(data):
@@ -30,7 +30,6 @@ def decrypt_data(data):
 # Data Processing
 def process_file(uploaded_file):
     file_ext = Path(uploaded_file.name).suffix[1:].lower()
-    
     try:
         if file_ext == 'csv':
             return {'Sheet1': pd.read_csv(uploaded_file)}
@@ -77,7 +76,7 @@ def sql_ide(dataframes):
     selected_sheet = st.selectbox("Select Dataset", list(dataframes.keys()))
     df = dataframes[selected_sheet]
     
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("SQL Editor")
@@ -93,6 +92,9 @@ def sql_ide(dataframes):
         
         if st.button("▶ Execute Query"):
             try:
+                # Register the dataframe with DuckDB under the name "df"
+                duckdb.unregister('df') if 'df' in duckdb.list() else None
+                duckdb.register("df", df)
                 result = duckdb.query(query).to_df()
                 st.session_state.last_result = result
                 st.success("Query executed successfully!")
@@ -121,8 +123,7 @@ def main():
         if not data:
             return
             
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Explorer", "⚡ SQL Lab", 
-                                        "📈 Visualize", "🔧 Tools"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Explorer", "⚡ SQL Lab", "📈 Visualize", "🔧 Tools"])
         
         with tab1:
             sheet_names = list(data.keys())
@@ -132,13 +133,14 @@ def main():
             gb.configure_side_bar()
             gb.configure_default_column(groupable=True, enableRowGroup=True)
             grid_options = gb.build()
-            AgGrid(data[selected_sheet], gridOptions=grid_options, 
-                 height=600, theme='streamlit')
+            AgGrid(data[selected_sheet], gridOptions=grid_options, height=600, theme='streamlit')
         
         with tab2:
             sql_ide(data)
         
         with tab3:
+            # Use the sheet selected in the Explorer tab; if not defined, use the first sheet.
+            selected_sheet = list(data.keys())[0] if not 'selected_sheet' in locals() else selected_sheet
             create_interactive_viz(data[selected_sheet])
         
         with tab4:
@@ -151,11 +153,4 @@ def main():
                 st.success("Basic cleaning applied!")
             
             st.download_button(
-                "Export to CSV",
-                data[selected_sheet].to_csv().encode('utf-8'),
-                file_name="exported_data.csv",
-                mime="text/csv"
-            )
-
-if __name__ == "__main__":
-    main()
+                "Export to CSV
